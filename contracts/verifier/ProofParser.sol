@@ -7,8 +7,7 @@ import "../vcs/MerkleVerifier.sol";
 import "../pcs/PcsConfig.sol";
 
 /// @title ProofParser
-/// @notice Helper library to parse proof.json data into Solidity structs
-/// @dev Provides functions to convert JSON arrays into proper Solidity structures
+/// @notice Helper library to parse proof data into Solidity structs
 library ProofParser {
     using QM31Field for QM31Field.QM31;
 

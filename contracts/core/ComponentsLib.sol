@@ -7,8 +7,7 @@ import "./FrameworkComponentLib.sol";
 
 
 /// @title ComponentsLib
-/// @notice Library implementing Components functionality based on Rust stwo Components struct
-/// @dev Provides composition_log_degree_bound and mask_points functions for multiple components
+/// @notice Library implementing Components functionality
 library ComponentsLib {
     using QM31Field for QM31Field.QM31;
     using FrameworkComponentLib for FrameworkComponentLib.ComponentState;
@@ -27,9 +26,9 @@ library ComponentsLib {
 
     /// @notice TreeVec structure for mask points
     struct TreeVecMaskPoints {
-        CirclePoint.Point[][][] points; // [tree][column][point]
-        uint256[] nColumnsPerTree; // Number of columns per tree
-        uint256 totalPoints; // Total number of mask points
+        CirclePoint.Point[][][] points;
+        uint256[] nColumnsPerTree;
+        uint256 totalPoints;
     }
 
 

@@ -6,8 +6,7 @@ import "../fields/QM31Field.sol";
 
 /**
  * @title KeccakChannelLib
- * @notice Library for STWO verifier channel using native EVM keccak256 for optimal gas efficiency
- * @dev Uses keccak256 (~36 gas) instead of Blake2s (~263k gas) for dramatic cost reduction
+ * @notice Library for STWO verifier channel using native EVM keccak256
  */
 library KeccakChannelLib {
     using M31Field for uint32;
@@ -34,24 +33,18 @@ library KeccakChannelLib {
     }
     
     /// @notice Initialize channel state with specific digest and draw counter
-    /// @param state Channel state to initialize
-    /// @param digest Initial digest value
-    /// @param nDraws Initial number of draws
     function initializeWith(ChannelState storage state, bytes32 digest, uint32 nDraws) internal {
         state.digest = digest;
         state.nDraws = nDraws;
     }
     
     /// @notice Clear channel state after verification
-    /// @param state Channel state to clear
     function clearState(ChannelState storage state) internal {
         state.digest = bytes32(0);
         state.nDraws = 0;
     }
     
     /// @notice Update digest and reset draw counter
-    /// @param state Channel state
-    /// @param newDigest New digest value
     function updateDigest(ChannelState storage state, bytes32 newDigest) internal {
         state.digest = newDigest;
         state.nDraws = 0;
@@ -63,8 +56,6 @@ library KeccakChannelLib {
     }
     
     /// @notice Mix array of u32 values using keccak256
-    /// @param state Channel state
-    /// @param data U32 array to mix
     function mixU32s(ChannelState storage state, uint32[] memory data) internal {
         bytes memory input = abi.encodePacked(state.digest);
         
@@ -77,13 +68,8 @@ library KeccakChannelLib {
     }
     
     /// @notice Mix array of QM31 field elements into channel
-    /// @dev Matches Rust implementation exactly:
-    ///      let felts_bytes = felts.iter().flat_map(|qm31| qm31.to_m31_array()).flat_map(|m31| m31.0.to_le_bytes()).collect_vec();
-    ///      hasher.update(self.digest); hasher.update(&felts_bytes); self.update_digest(hasher.finalize())
-    /// @param state Channel state to update
-    /// @param felts Array of QM31 field elements to mix
     function mixFelts(ChannelState storage state, QM31Field.QM31[] memory felts) internal {
-        bytes memory feltsBytes = new bytes(felts.length * 16); // Each QM31 = 4×M31 = 4×4 bytes = 16 bytes
+        bytes memory feltsBytes = new bytes(felts.length * 16);
         uint256 byteIndex = 0;
         
         for (uint256 i = 0; i < felts.length; i++) {
@@ -105,8 +91,6 @@ library KeccakChannelLib {
     }
     
     /// @notice Mix u64 value by splitting into two u32s
-    /// @param state Channel state
-    /// @param value U64 value to mix
     function mixU64(ChannelState storage state, uint64 value) internal {
         uint32[] memory u32s = new uint32[](2);
         u32s[0] = uint32(value);
@@ -115,8 +99,6 @@ library KeccakChannelLib {
     }
     
     /// @notice Draw random secure field element
-    /// @param state Channel state
-    /// @return Random QM31 element
     function drawSecureFelt(ChannelState storage state) internal returns (QM31Field.QM31 memory) {
         uint32[FELTS_PER_HASH] memory basefelts = _drawBaseFelts(state);
         
@@ -129,14 +111,11 @@ library KeccakChannelLib {
     }
     
     /// @notice Draw multiple random secure field elements
-    /// @param state Channel state
-    /// @param nFelts Number of elements to draw
-    /// @return Array of random QM31 elements
     function drawSecureFelts(ChannelState storage state, uint256 nFelts) internal returns (QM31Field.QM31[] memory) {
         QM31Field.QM31[] memory result = new QM31Field.QM31[](nFelts);
         
         uint32[FELTS_PER_HASH] memory currentBatch;
-        uint256 batchIndex = FELTS_PER_HASH; // Force initial generation
+        uint256 batchIndex = FELTS_PER_HASH;
         
         for (uint256 i = 0; i < nFelts; i++) {
             if (batchIndex + SECURE_EXTENSION_DEGREE > FELTS_PER_HASH) {
@@ -157,13 +136,11 @@ library KeccakChannelLib {
     }
     
     /// @notice Draw random u32 values from current state
-    /// @param state Channel state
-    /// @return Array of random u32 values
     function drawU32s(ChannelState storage state) internal returns (uint32[] memory) {
         bytes memory input = abi.encodePacked(
             state.digest,
             _u32ToLittleEndian(state.nDraws),
-            uint8(0) // Domain separation byte
+            uint8(0)
         );
         
         state.nDraws++;
@@ -182,10 +159,6 @@ library KeccakChannelLib {
     }
     
     /// @notice Verify proof-of-work nonce
-    /// @param state Channel state
-    /// @param nBits Required number of leading zeros
-    /// @param nonce Proof-of-work nonce
-    /// @return True if nonce is valid
     function verifyPowNonce(ChannelState storage state, uint32 nBits, uint64 nonce) internal view returns (bool) {
         bytes memory prefixInput = abi.encodePacked(
             _u32ToLittleEndian(POW_PREFIX),
@@ -206,11 +179,7 @@ library KeccakChannelLib {
         return trailingZeros >= nBits;
     }
     
-    /// @notice Hash two elements sequentially like Rust keccak.update(element1).update(element2)
-    /// @param state Channel state
-    /// @param left First element to hash
-    /// @param right Second element to hash
-    /// @return Final hash after sequential updates
+    /// @notice Hash two elements sequentially
     function mixRoot(ChannelState storage state, bytes32 left, bytes32 right) internal returns (bytes32) {
         bytes32 newDigest = keccak256(abi.encodePacked(left, right));
         state.nDraws = 0;
@@ -219,10 +188,8 @@ library KeccakChannelLib {
     }
     
     /// @notice Generate uniform random M31 field elements
-    /// @param state Channel state
-    /// @return Array of valid M31 field elements
     function _drawBaseFelts(ChannelState storage state) private returns (uint32[FELTS_PER_HASH] memory) {
-        uint32 maxRetries = 100; // Prevent infinite loops
+        uint32 maxRetries = 100;
         uint32 retries = 0;
         
         while (retries < maxRetries) {
@@ -251,8 +218,6 @@ library KeccakChannelLib {
     }
 
     /// @notice Convert u32 to little-endian bytes
-    /// @param value U32 value to convert
-    /// @return Little-endian bytes representation
     function _u32ToLittleEndian(uint32 value) private pure returns (bytes4) {
         return bytes4(abi.encodePacked(
             uint8(value),
@@ -263,8 +228,6 @@ library KeccakChannelLib {
     }
     
     /// @notice Convert u64 to little-endian bytes
-    /// @param value U64 value to convert
-    /// @return Little-endian bytes representation
     function _u64ToLittleEndian(uint64 value) private pure returns (bytes8) {
         return bytes8(
             _u32ToLittleEndian(uint32(value)) |
@@ -272,9 +235,7 @@ library KeccakChannelLib {
         );
     }
     
-    /// @notice Count trailing zeros in hash (little-endian interpretation)
-    /// @param hash Hash to analyze
-    /// @return Number of trailing zeros
+    /// @notice Count trailing zeros in hash
     function _countTrailingZeros(bytes32 hash) private pure returns (uint256) {
         uint256 zeros = 0;
         

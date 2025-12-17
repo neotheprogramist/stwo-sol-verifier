@@ -6,64 +6,50 @@ import "./M31Field.sol";
 /**
  * @title CM31Field
  * @notice Implementation of complex extension field over M31 (CM31: M31[i]/(i²+1))
- * @dev This library implements complex field operations for CM31 = M31[i] where i² = -1.
- *      Each CM31 element is represented as (real, imaginary) pair of M31 elements.
- *      Equivalent to M31[x] over (x² + 1) as the irreducible polynomial.
  */
 library CM31Field {
     using M31Field for uint32;
 
     /// @notice Complex number representation: real + imag*i
     struct CM31 {
-        uint32 real;  // Real part (M31 element)
-        uint32 imag;  // Imaginary part (M31 element)
+        uint32 real;
+        uint32 imag;
     }
 
     /// @notice The field size: (2^31 - 1)² for CM31
-    uint64 public constant P2 = 4611686014132420609; // (2^31-1)^2
+    uint64 public constant P2 = 4611686014132420609;
 
-    /// @notice Additive identity (0 + 0i)
+    /// @notice Additive identity
     function zero() internal pure returns (CM31 memory) {
         return CM31(0, 0);
     }
 
-    /// @notice Multiplicative identity (1 + 0i)
+    /// @notice Multiplicative identity
     function one() internal pure returns (CM31 memory) {
         return CM31(1, 0);
     }
 
-    /// @notice Imaginary unit (0 + 1i)
+    /// @notice Imaginary unit
     function imaginaryUnit() internal pure returns (CM31 memory) {
         return CM31(0, 1);
     }
 
     /// @notice Create CM31 element from M31 components
-    /// @param real Real part as M31 element
-    /// @param imag Imaginary part as M31 element
-    /// @return CM31 element representing real + imag*i
     function fromM31(uint32 real, uint32 imag) internal pure returns (CM31 memory) {
         return CM31(real, imag);
     }
 
-    /// @notice Create CM31 element from real M31 element (imaginary part = 0)
-    /// @param real Real part as M31 element
-    /// @return CM31 element representing real + 0*i
+    /// @notice Create CM31 element from real M31 element
     function fromReal(uint32 real) internal pure returns (CM31 memory) {
         return CM31(real, 0);
     }
 
     /// @notice Create CM31 element from unchecked u32 values
-    /// @param real Raw real part
-    /// @param imag Raw imaginary part
-    /// @return CM31 element (components will be reduced mod P)
     function fromU32Unchecked(uint32 real, uint32 imag) internal pure returns (CM31 memory) {
         return CM31(real % M31Field.MODULUS, imag % M31Field.MODULUS);
     }
 
     /// @notice Addition in CM31 field
-    /// @param a First operand
-    /// @param b Second operand
-    /// @return Sum a + b
     function add(CM31 memory a, CM31 memory b) internal pure returns (CM31 memory) {
         return CM31(
             M31Field.add(a.real, b.real),
@@ -72,9 +58,6 @@ library CM31Field {
     }
 
     /// @notice Subtraction in CM31 field
-    /// @param a Minuend
-    /// @param b Subtrahend
-    /// @return Difference a - b
     function sub(CM31 memory a, CM31 memory b) internal pure returns (CM31 memory) {
         return CM31(
             M31Field.sub(a.real, b.real),
@@ -83,8 +66,6 @@ library CM31Field {
     }
 
     /// @notice Negation in CM31 field
-    /// @param a Value to negate
-    /// @return Negated value -a
     function neg(CM31 memory a) internal pure returns (CM31 memory) {
         return CM31(
             M31Field.neg(a.real),
@@ -92,19 +73,13 @@ library CM31Field {
         );
     }
 
-    /// @notice Multiplication in CM31 field
-    /// @param a First operand
-    /// @param b Second operand
-    /// @return Product a * b
-    /// @dev (a + bi) * (c + di) = (ac - bd) + (ad + bc)i
+    /// @notice Multiplication in CM31 field: (a + bi) * (c + di) = (ac - bd) + (ad + bc)i
     function mul(CM31 memory a, CM31 memory b) internal pure returns (CM31 memory) {
-        // ac - bd
         uint32 realPart = M31Field.sub(
             M31Field.mul(a.real, b.real),
             M31Field.mul(a.imag, b.imag)
         );
         
-        // ad + bc
         uint32 imagPart = M31Field.add(
             M31Field.mul(a.real, b.imag),
             M31Field.mul(a.imag, b.real)

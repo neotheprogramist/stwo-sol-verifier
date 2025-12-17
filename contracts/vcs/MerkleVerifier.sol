@@ -5,29 +5,23 @@ import "../fields/M31Field.sol";
 
 /// @title MerkleVerifier
 /// @notice Verifies Merkle tree decommitments for vector commitment schemes
-/// @dev Handles verification of multiple columns with different log sizes (matches Rust implementation)
 library MerkleVerifier {
     using M31Field for uint32;
 
-    /// @notice Single Merkle tree verifier (matches Rust MerkleVerifier<H>)
-    /// @param root Merkle tree root hash
-    /// @param columnLogSizes Log sizes for each column in this tree
-    /// @param nColumnsPerLogSize Number of columns for each log size (as parallel arrays for memory compatibility)
+    /// @notice Single Merkle tree verifier
     struct MerkleTree {
         bytes32 root;
         uint32[] columnLogSizes;
-        uint32[] logSizes;        // Unique log sizes (sorted keys)
-        uint256[] nColumnsPerLogSize; // Corresponding counts (parallel to logSizes)
+        uint32[] logSizes;
+        uint256[] nColumnsPerLogSize;
     }
 
-    /// @notice Commitment scheme verifier state (matches Rust CommitmentSchemeVerifier<MC>)
-    /// @dev Contains multiple Merkle trees (TreeVec<MerkleVerifier<MC::H>>)
-    /// @param trees Array of Merkle tree verifiers
+    /// @notice Commitment scheme verifier state
     struct Verifier {
         MerkleTree[] trees;
     }
     
-    /// @notice Legacy single-tree verifier (for backward compatibility)
+    /// @notice Legacy single-tree verifier
     /// @dev Alias for MerkleTree - use this for single tree operations
     struct VerifierLegacy {
         bytes32 root;

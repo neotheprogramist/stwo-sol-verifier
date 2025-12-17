@@ -5,10 +5,7 @@ pragma solidity ^0.8.20;
 /// @notice Configuration for Polynomial Commitment Scheme verification
 library PcsConfig {
 
-    /// @notice FRI (Fast Reed-Solomon Interactive Oracle Proof) configuration
-    /// @param logBlowupFactor Log of FRI blowup factor (extension degree)
-    /// @param logLastLayerDegreeBound Log of degree bound for last FRI layer
-    /// @param nQueries Number of FRI queries for soundness
+    /// @notice FRI configuration
     struct FriConfig {
         uint32 logBlowupFactor;
         uint32 logLastLayerDegreeBound; 
@@ -16,8 +13,6 @@ library PcsConfig {
     }
 
     /// @notice Polynomial Commitment Scheme configuration
-    /// @param powBits Number of proof-of-work bits required
-    /// @param friConfig FRI verification parameters
     struct Config {
         uint32 powBits;
         FriConfig friConfig;
@@ -27,12 +22,11 @@ library PcsConfig {
     error InvalidConfig(string reason);
 
     /// @notice Create default FRI configuration for testing
-    /// @return Default FRI configuration
     function defaultFriConfig() internal pure returns (FriConfig memory) {
         return FriConfig({
-            logBlowupFactor: 1,  // 2x blowup factor
-            logLastLayerDegreeBound: 0,  // Degree bound 1 for last layer
-            nQueries: 84  // Standard number of queries for ~100-bit security
+            logBlowupFactor: 1,
+            logLastLayerDegreeBound: 0,
+            nQueries: 84
         });
     }
 

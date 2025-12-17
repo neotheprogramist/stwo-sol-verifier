@@ -6,8 +6,7 @@ import "../fields/M31Field.sol";
 import "../fields/CM31Field.sol";
 
 /// @title CosetM31
-/// @notice Represents a coset in the circle group using M31 points: initial + <step>
-/// @dev Implements coset operations equivalent to Rust stwo implementation with M31
+/// @notice Represents a coset in the circle group using M31 points
 library CosetM31 {
     using CirclePointM31 for CirclePointM31.Point;
     using M31Field for uint32;
@@ -40,26 +39,17 @@ library CosetM31 {
     /// @notice Error thrown when index is out of bounds
     error IndexOutOfBounds(uint256 index, uint256 maxIndex);
 
-    // =============================================================================
-    // CirclePointIndex Operations
-    // =============================================================================
-
     /// @notice Create zero circle point index
-    /// @return index Zero index
     function zeroIndex() internal pure returns (CirclePointIndex memory index) {
         index.value = 0;
     }
 
     /// @notice Create circle point index from value
-    /// @param value Index value
-    /// @return index Circle point index
     function indexFromValue(uint32 value) internal pure returns (CirclePointIndex memory index) {
         index.value = value;
     }
 
     /// @notice Create subgroup generator index
-    /// @param logSizeParam Log size of subgroup
-    /// @return index Generator index
     function subgroupGen(uint32 logSizeParam) internal pure returns (CirclePointIndex memory index) {
         if (logSizeParam > M31_CIRCLE_LOG_ORDER) {
             revert LogSizeTooLarge(logSizeParam, M31_CIRCLE_LOG_ORDER);
@@ -73,9 +63,6 @@ library CosetM31 {
     }
 
     /// @notice Add two circle point indices
-    /// @param a First index
-    /// @param b Second index
-    /// @return sum Sum of indices
     function addIndices(CirclePointIndex memory a, CirclePointIndex memory b) 
         internal 
         pure 
@@ -85,9 +72,6 @@ library CosetM31 {
     }
 
     /// @notice Multiply circle point index by scalar
-    /// @param index Index to multiply
-    /// @param scalar Scalar multiplier
-    /// @return product Product of index and scalar
     function mulIndex(CirclePointIndex memory index, uint256 scalar) 
         internal 
         pure 
@@ -97,17 +81,11 @@ library CosetM31 {
     }
 
     /// @notice Negate circle point index
-    /// @dev Maps to Rust: Self((1 << M31_CIRCLE_LOG_ORDER) - self.0).reduce()
-    /// @param index Index to negate
-    /// @return negated Negated index
     function negIndex(CirclePointIndex memory index) 
         internal 
         pure 
         returns (CirclePointIndex memory negated) 
     {
-        // Rust: Self((1 << M31_CIRCLE_LOG_ORDER) - self.0).reduce()
-        // Since M31_CIRCLE_ORDER = 1 << M31_CIRCLE_LOG_ORDER, this is:
-        // (M31_CIRCLE_ORDER - index.value) % M31_CIRCLE_ORDER
         if (index.value == 0) {
             negated.value = 0;
         } else {
@@ -116,25 +94,18 @@ library CosetM31 {
     }
 
     /// @notice Convert circle point index to actual M31 circle point
-    /// @dev Maps to Rust: M31_CIRCLE_GEN.mul(index.value as u128)
-    /// @param index Index to convert
-    /// @return point M31 circle point at index (generator^index)
     function indexToPoint(CirclePointIndex memory index)
         internal
         pure
         returns (CirclePointM31.Point memory point)
     {
-        // Rust: M31_CIRCLE_GEN.mul(self.0 as u128)
         if (index.value == 0) {
-            // Identity element: (1, 0) in M31
             return CirclePointM31.Point({
                 x: M31Field.one(),
                 y: M31Field.zero()
             });
         }
         
-        // Use CirclePointM31.mul directly - this should match Rust implementation
-        // The generator in Rust is the primitive element that generates the circle group
         CirclePointM31.Point memory generator = CirclePointM31.Point({
             x: M31_CIRCLE_GEN_X,
             y: M31_CIRCLE_GEN_Y
@@ -142,14 +113,7 @@ library CosetM31 {
         return CirclePointM31.mul(generator, index.value);
     }
 
-    // =============================================================================
-    // Coset Construction
-    // =============================================================================
-
-    /// @notice Create new coset from index and log size (main constructor)
-    /// @param initialIndex Starting index of coset
-    /// @param logSizeParam Log2 of coset size
-    /// @return coset New coset structure
+    /// @notice Create new coset from index and log size
     function newCoset(CirclePointIndex memory initialIndex, uint32 logSizeParam)
         internal
         pure
@@ -170,11 +134,7 @@ library CosetM31 {
         });
     }
 
-    /// @notice Create new coset with M31 points (alternative constructor)
-    /// @param initial Initial M31 point
-    /// @param step Step M31 point
-    /// @param logSize Log2 of coset size
-    /// @return coset New coset structure
+    /// @notice Create new coset with M31 points
     function newCosetFromPoints(
         CirclePointM31.Point memory initial,
         CirclePointM31.Point memory step,
@@ -188,14 +148,11 @@ library CosetM31 {
         coset.step = step;
         coset.logSize = logSize;
         
-        // Set indices (simplified - would need proper point-to-index conversion)
         coset.initialIndex = zeroIndex();
         coset.stepSize = indexFromValue(uint32(1 << (M31_CIRCLE_LOG_ORDER - logSize)));
     }
 
     /// @notice Create coset from generator and log size
-    /// @param logSize Log2 of coset size
-    /// @return coset New coset with generator step
     function fromGenerator(uint32 logSize) internal pure returns (CosetStruct memory coset) {
         CirclePointM31.Point memory generator = CirclePointM31.Point({
             x: M31_CIRCLE_GEN_X,
@@ -210,37 +167,24 @@ library CosetM31 {
     }
 
     /// @notice Create a subgroup coset of the form <G_n>
-    /// @param logSizeParam Log size of subgroup
-    /// @return coset Subgroup coset
     function subgroup(uint32 logSizeParam) internal pure returns (CosetStruct memory coset) {
         CirclePointIndex memory zero = zeroIndex();
         coset = newCoset(zero, logSizeParam);
     }
 
     /// @notice Create an odds coset of the form G_2n + <G_n>
-    /// @param logSizeParam Log size parameter
-    /// @return coset Odds coset
     function odds(uint32 logSizeParam) internal pure returns (CosetStruct memory coset) {
         CirclePointIndex memory gen = subgroupGen(logSizeParam + 1);
         coset = newCoset(gen, logSizeParam);
     }
 
     /// @notice Create a half-odds coset of the form G_4n + <G_n>
-    /// @param logSizeParam Log size parameter
-    /// @return coset Half-odds coset
     function halfOdds(uint32 logSizeParam) internal pure returns (CosetStruct memory coset) {
         CirclePointIndex memory gen = subgroupGen(logSizeParam + 2);
         coset = newCoset(gen, logSizeParam);
     }
 
-    // =============================================================================
-    // Coset Operations
-    // =============================================================================
-
     /// @notice Get M31 point at specific index in coset
-    /// @param coset Coset to access
-    /// @param index Index within coset
-    /// @return point M31 point at index
     function at(CosetStruct memory coset, uint256 index) 
         internal 
         pure 
@@ -251,15 +195,11 @@ library CosetM31 {
             revert IndexOutOfBounds(index, maxIndex - 1);
         }
         
-        // point = initial + index * step
         CirclePointM31.Point memory indexStep = CirclePointM31.mul(coset.step, index);
         point = CirclePointM31.add(coset.initial, indexStep);
     }
 
     /// @notice Get circle point index at specific position
-    /// @param coset Coset to access
-    /// @param index Position within coset
-    /// @return pointIndex Index of point at position
     function indexAt(CosetStruct memory coset, uint256 index) 
         internal 
         pure 
@@ -275,23 +215,16 @@ library CosetM31 {
     }
 
     /// @notice Get size of coset
-    /// @param coset Coset to measure
-    /// @return cosetSize Number of points in coset
     function size(CosetStruct memory coset) internal pure returns (uint256 cosetSize) {
         return 1 << coset.logSize;
     }
 
     /// @notice Get log size of coset
-    /// @dev Direct access to coset.logSize field is preferred
-    /// @param coset Coset to measure
-    /// @return logSizeValue Log2 of coset size
     function logSizeFunc(CosetStruct memory coset) internal pure returns (uint32 logSizeValue) {
         return coset.logSize;
     }
 
     /// @notice Get initial M31 point of coset
-    /// @param coset Coset to access
-    /// @return initialPoint Initial M31 point
     function getInitial(CosetStruct memory coset) internal pure returns (CirclePointM31.Point memory initialPoint) {
         initialPoint = coset.initial;
     }

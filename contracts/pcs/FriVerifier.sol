@@ -15,8 +15,7 @@ import "../core/KeccakChannelLib.sol";
 import "../vcs/MerkleVerifier.sol";
 
 /// @title FriVerifier
-/// @notice Library for FRI (Fast Reed-Solomon Interactive) proximity proof verification
-/// @dev Implements the verifier side of FRI protocol using Keccak-based Merkle channel
+/// @notice Library for FRI proximity proof verification
 library FriVerifier {
     using PcsConfig for PcsConfig.FriConfig;
     using CirclePolyDegreeBound for CirclePolyDegreeBound.Bound;
@@ -26,33 +25,22 @@ library FriVerifier {
     using KeccakChannelLib for KeccakChannelLib.ChannelState;
     using MerkleVerifier for MerkleVerifier.Verifier;
 
-    /// @notice Secure extension degree for field operations (matches Rust SECURE_EXTENSION_DEGREE)
+    /// @notice Secure extension degree for field operations
     uint32 constant SECURE_EXTENSION_DEGREE = 4;
 
     /// @notice Query structure for FRI decommitment
-    /// @param positions Query positions sorted in ascending order
-    /// @param logDomainSize Size of the domain from which queries were sampled
     struct Queries {
         uint256[] positions;
         uint32 logDomainSize;
     }
 
     /// @notice Mapping of log sizes to query positions
-    /// @param logSizes Array of unique log sizes
-    /// @param queryPositions Array of query position arrays, indexed by logSizes
     struct QueryPositionsByLogSize {
         uint32[] logSizes;
         uint256[][] queryPositions;
     }
 
     /// @notice FRI verifier state for commitment phase
-    /// @param config FRI configuration parameters
-    /// @param firstLayer First layer verifier state
-    /// @param innerLayers Array of inner layer verifier states
-    /// @param lastLayerDomainLogSize Log size of last layer domain
-    /// @param lastLayerPoly Coefficients of last layer polynomial
-    /// @param queries Generated queries (set after sampling)
-    /// @param queryPositionsByLogSize Query positions organized by log size
     struct FriVerifierState {
         PcsConfig.FriConfig config;
         FriFirstLayerVerifier firstLayer;
@@ -60,16 +48,12 @@ library FriVerifier {
         uint32 lastLayerDomainLogSize;
         QM31Field.QM31[] lastLayerPoly;
         CosetM31.CosetStruct lastLayerDomain;
-        Queries queries; // Set when queries are sampled
+        Queries queries;
         QueryPositionsByLogSize queryPositionsByLogSize;
         bool queriesSampled;
     }
 
     /// @notice First layer verifier containing column degree bounds and domains
-    /// @param columnBounds Circle polynomial degree bounds in descending order
-    /// @param columnCommitmentDomains Commitment domains for each column
-    /// @param foldingAlpha Random folding coefficient from channel
-    /// @param proof First layer proof data
     struct FriFirstLayerVerifier {
         CirclePolyDegreeBound.Bound[] columnBounds;
         CircleDomain.CircleDomainStruct[] columnCommitmentDomains;

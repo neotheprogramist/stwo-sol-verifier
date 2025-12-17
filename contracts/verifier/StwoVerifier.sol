@@ -16,7 +16,7 @@ import "./ProofParser.sol";
 import "../secure_poly/SecureCirclePoly.sol";
 
 /// @title STWOVerifier
-/// @notice Generic STARK verifier for any AIR implementation
+/// @notice Generic STARK verifier
 contract STWOVerifier {
     using QM31Field for QM31Field.QM31;
     using FrameworkComponentLib for FrameworkComponentLib.ComponentState;
@@ -57,9 +57,6 @@ contract STWOVerifier {
     }
 
     /// @notice Verify a STARK proof
-    /// @param proof Complete proof structure
-    /// @param params Verification parameters
-    /// @return bool True if proof is valid
     function verify(
         ProofParser.Proof calldata proof,
         VerificationParams calldata params,
@@ -263,9 +260,7 @@ contract STWOVerifier {
         return maskPoints;
     }
 
-    /// @notice Get n_columns_per_log_size for each tree (matching Rust BTreeMap<u32, usize>)
-    /// @param scheme The commitment scheme state
-    /// @return Array of [logSize, nColumns] pairs for each tree
+    /// @notice Get n_columns_per_log_size for each tree
     function getNColumnsPerLogSize(
         CommitmentSchemeVerifierLib.VerifierState storage scheme
     ) internal view returns (uint32[][][] memory) {
@@ -309,13 +304,11 @@ contract STWOVerifier {
     }
 
     /// @notice Concatenate columns from multiple component mask points
-    /// @param componentMaskPoints Array of mask points from each component
-    /// @return concatenated TreeVec with concatenated columns
     function _concatCols(
         FrameworkComponentLib.SamplePoints[] memory componentMaskPoints
     ) internal pure returns (ComponentsLib.TreeVecMaskPoints memory concatenated) {
         if (componentMaskPoints.length == 0) {
-            concatenated.nColumnsPerTree = new uint256[](3); // 3 trees
+            concatenated.nColumnsPerTree = new uint256[](3);
             concatenated.points = new CirclePoint.Point[][][](3);
             concatenated.totalPoints = 0;
             return concatenated;
@@ -353,8 +346,6 @@ contract STWOVerifier {
     }
 
     /// @notice Initialize preprocessed columns with empty vectors
-    /// @param maskPoints The mask points structure to modify
-    /// @param nPreprocessedColumns Number of preprocessed columns  
     function _initializePreprocessedColumns(
         ComponentsLib.TreeVecMaskPoints memory maskPoints,
         uint256 nPreprocessedColumns
@@ -369,10 +360,7 @@ contract STWOVerifier {
         }
     }
 
-    /// @notice Set preprocessed mask points to [point] for each component's preprocessed columns
-    /// @param components Array of component states
-    /// @param maskPoints The mask points structure to modify
-    /// @param point The point to set for preprocessed columns
+    /// @notice Set preprocessed mask points for each component's preprocessed columns
     function _setPreprocessedMaskPoints(
         FrameworkComponentLib.ComponentState[] memory components,
         ComponentsLib.TreeVecMaskPoints memory maskPoints,
@@ -392,8 +380,6 @@ contract STWOVerifier {
     }
 
     /// @notice Get unique log sizes from array
-    /// @param logSizes Array of log sizes
-    /// @return Array of unique log sizes in ascending order
     function _getUniqueLogSizes(
         uint32[] memory logSizes
     ) internal pure returns (uint32[] memory) {
@@ -453,9 +439,6 @@ contract STWOVerifier {
     }
 
     /// @notice Zip sample points with sampled values to create PointSample structure
-    /// @param samplePoints Sample points structure
-    /// @param sampledValues Sampled values from proof
-    /// @return samples Array of PointSample structures
     function _zipSamplePointsWithValues(
         ComponentsLib.TreeVecMaskPoints memory samplePoints,
         QM31Field.QM31[][][] memory sampledValues
@@ -522,7 +505,6 @@ contract STWOVerifier {
     }
 
     /// @notice Verify OODS values
-    /// @dev Checks that claimed evaluations match the constraint polynomial
     function _verifyOods(
         CirclePoint.Point memory oodsPoint,
         QM31Field.QM31 memory compositionOodsEval,
@@ -610,10 +592,6 @@ contract STWOVerifier {
     }
 
     /// @notice Verify Merkle tree decommitments for all trees
-    /// @param decommitments Array of Merkle decommitments
-    /// @param queriedValues Array of queried values
-    /// @param queryPositions Query positions organized by log size
-    /// @return True if all tree verifications pass
     function _verifyMerkleDecommitments(
         MerkleVerifier.Decommitment[] memory decommitments,
         uint32[][] memory queriedValues,
@@ -666,9 +644,7 @@ contract STWOVerifier {
         return true;
     }
 
-    /// @notice Convert FriVerifier.QueryPositionsByLogSize to MerkleVerifier.QueriesPerLogSize format
-    /// @param queryPositions Query positions from FRI verifier
-    /// @return queriesPerLogSize Array in MerkleVerifier format
+    /// @notice Convert QueryPositionsByLogSize to QueriesPerLogSize format
     function _convertQueryPositions(
         FriVerifier.QueryPositionsByLogSize memory queryPositions
     )
@@ -688,10 +664,7 @@ contract STWOVerifier {
         }
     }
 
-    /// @notice Filter query positions to only include those relevant for a specific tree
-    /// @param queryPositions All query positions from FRI verifier
-    /// @param treeLogSizes Unique log sizes present in this tree
-    /// @return filtered Array with only queries for log sizes present in the tree
+    /// @notice Filter query positions for a specific tree
     function _filterQueryPositionsForTree(
         FriVerifier.QueryPositionsByLogSize memory queryPositions,
         uint32[] memory treeLogSizes
@@ -728,9 +701,6 @@ contract STWOVerifier {
     }
 
     /// @notice Get log size information for a single tree
-    /// @param columnLogSizes Array of column log sizes
-    /// @return logSizes Unique log sizes
-    /// @return nColumnsPerLogSize Count of columns per log size
     function _getTreeLogSizeInfo(
         uint32[] memory columnLogSizes
     )

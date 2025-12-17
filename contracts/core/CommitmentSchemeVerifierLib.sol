@@ -9,8 +9,7 @@ import "../fields/QM31Field.sol";
 import "./KeccakChannelLib.sol";
 
 /// @title CommitmentSchemeVerifierLib
-/// @notice Library for verifying polynomial commitment scheme proofs using FRI and Merkle trees
-/// @dev Stateless library for STWO commitment scheme with state stored in calling contract
+/// @notice Library for verifying polynomial commitment scheme proofs
 library CommitmentSchemeVerifierLib {
     using PcsConfig for PcsConfig.Config;
     using MerkleVerifier for MerkleVerifier.Verifier;
@@ -20,27 +19,19 @@ library CommitmentSchemeVerifierLib {
     using KeccakChannelLib for KeccakChannelLib.ChannelState;
 
     /// @notice Verifier state containing trees and configuration
-    /// @param trees TreeVec of Merkle verifiers for each commitment tree
-    /// @param config PCS configuration (FRI + PoW parameters)
     struct VerifierState {
-        MerkleVerifier.Verifier merkleVerifier;    // Multi-tree Merkle verifier
-        PcsConfig.Config config;                    // PCS configuration
+        MerkleVerifier.Verifier merkleVerifier;
+        PcsConfig.Config config;
     }
 
     /// @notice Commitment scheme proof structure
-    /// @param commitments Tree roots for each commitment
-    /// @param sampledValues Sampled polynomial values at OODS point
-    /// @param decommitments Merkle decommitment proofs
-    /// @param queriedValues Values at FRI query positions
-    /// @param proofOfWork Proof of work nonce
-    /// @param friProof FRI verification proof (placeholder for now)
     struct Proof {
-        bytes32[] commitments;           // TreeVec<Hash>
-        QM31Field.QM31[] sampledValues;  // TreeVec<ColumnVec<Vec<SecureField>>>
-        bytes[] decommitments;           // TreeVec<MerkleDecommitment> (encoded)
-        uint32[] queriedValues;          // TreeVec<Vec<BaseField>>
-        uint64 proofOfWork;              // Proof of work nonce
-        bytes friProof;                  // FRI proof (to be implemented)
+        bytes32[] commitments;
+        QM31Field.QM31[] sampledValues;
+        bytes[] decommitments;
+        uint32[] queriedValues;
+        uint64 proofOfWork;
+        bytes friProof;
     }
 
     /// @notice Commitment scheme verification error types
@@ -57,10 +48,6 @@ library CommitmentSchemeVerifierLib {
     event VerificationCompleted(bool indexed success);
 
     /// @notice Initialize verifier state with configuration and trees
-    /// @param state Verifier state to initialize
-    /// @param config PCS configuration
-    /// @param treeRoots Array of Merkle tree roots (from proof commitments)
-    /// @param treeColumnLogSizes Array of column log sizes arrays (one per tree)
     function initialize(
         VerifierState storage state, 
         PcsConfig.Config memory config,

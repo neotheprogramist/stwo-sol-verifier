@@ -11,15 +11,12 @@ library CirclePoint {
     using KeccakChannelLib for KeccakChannelLib.ChannelState;
 
     /// @notice Represents a point on the circle with coordinates (x, y)
-    /// @dev Both x and y are elements of the SecureField (QM31)
     struct Point {
         QM31Field.QM31 x;
         QM31Field.QM31 y;
     }
 
     /// @notice Returns the zero element (identity) of the circle group
-    /// @dev The identity element is (1, 0)
-    /// @return The identity point (1, 0)
     function zero() internal pure returns (Point memory) {
         return Point({
             x: QM31Field.one(),
