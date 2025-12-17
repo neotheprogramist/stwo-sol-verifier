@@ -2,7 +2,7 @@
 pragma solidity ^0.8.20;
 
 import "./CosetM31.sol";
-import "./CirclePointM31.sol";
+import "../circle/CirclePointM31.sol";
 
 /// @title CanonicCosetM31
 /// @notice Canonical coset implementation using M31 points

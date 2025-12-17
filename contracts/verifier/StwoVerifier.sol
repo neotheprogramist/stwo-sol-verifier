@@ -1,17 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 pragma solidity ^0.8.20;
 
-import "../framework/IFrameworkEval.sol";
-import "../libraries/FrameworkComponentLib.sol";
-import "../libraries/ComponentsLib.sol";
-import "../libraries/TraceLocationAllocatorLib.sol";
-import "../libraries/KeccakChannelLib.sol";
-import "../libraries/CommitmentSchemeVerifierLib.sol";
+import "../core/FrameworkComponentLib.sol";
+import "../core/ComponentsLib.sol";
+import "../core/TraceLocationAllocatorLib.sol";
+import "../core/KeccakChannelLib.sol";
+import "../core/CommitmentSchemeVerifierLib.sol";
 import "../pcs/PcsConfig.sol";
 import "../pcs/FriVerifier.sol";
-import "../framework/TreeSubspan.sol";
-import "../core/PointEvaluationAccumulator.sol";
-import "../core/CirclePoint.sol";
+import "../utils/TreeSubspan.sol";
+import "../circle/CirclePoint.sol";
 import "../fields/QM31Field.sol";
 import "../vcs/MerkleVerifier.sol";
 import "./ProofParser.sol";
@@ -21,7 +19,6 @@ import "../secure_poly/SecureCirclePoly.sol";
 /// @notice Generic STARK verifier for any AIR implementation
 contract STWOVerifier {
     using QM31Field for QM31Field.QM31;
-    using PointEvaluationAccumulator for PointEvaluationAccumulator.Accumulator;
     using FrameworkComponentLib for FrameworkComponentLib.ComponentState;
     using ComponentsLib for ComponentsLib.Components;
     using TraceLocationAllocatorLib for TraceLocationAllocatorLib.AllocatorState;

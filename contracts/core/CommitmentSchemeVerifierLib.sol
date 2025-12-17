@@ -1,27 +1,22 @@
 // SPDX-License-Identifier: Apache-2.0
 pragma solidity ^0.8.20;
 
-import "../pcs/TreeVec.sol";
 import "../pcs/PcsConfig.sol";
 import "../vcs/MerkleVerifier.sol";
-import "../core/CirclePoint.sol";
-import "../core/CirclePolyDegreeBound.sol";
+import "../circle/CirclePoint.sol";
+import "../circle/CirclePolyDegreeBound.sol";
 import "../fields/QM31Field.sol";
-import "../utils/ArrayUtils.sol";
 import "./KeccakChannelLib.sol";
 
 /// @title CommitmentSchemeVerifierLib
 /// @notice Library for verifying polynomial commitment scheme proofs using FRI and Merkle trees
 /// @dev Stateless library for STWO commitment scheme with state stored in calling contract
 library CommitmentSchemeVerifierLib {
-    using TreeVec for TreeVec.Bytes32TreeVec;
-    using TreeVec for TreeVec.Uint32ArrayTreeVec;
     using PcsConfig for PcsConfig.Config;
     using MerkleVerifier for MerkleVerifier.Verifier;
     using QM31Field for QM31Field.QM31;
     using CirclePoint for CirclePoint.Point;
     using CirclePolyDegreeBound for CirclePolyDegreeBound.Bound;
-    using ArrayUtils for TreeVec.Uint32ArrayTreeVec;
     using KeccakChannelLib for KeccakChannelLib.ChannelState;
 
     /// @notice Verifier state containing trees and configuration

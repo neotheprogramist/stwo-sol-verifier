@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 pragma solidity ^0.8.20;
 
-import "../framework/TreeSubspan.sol";
+import "../utils/TreeSubspan.sol";
 
 /// @title TraceLocationAllocatorLib
 /// @notice Library for allocating trace locations for constraint framework components
@@ -161,7 +161,7 @@ library TraceLocationAllocatorLib {
         columnIndices = new uint256[](columnIds.length);
         
         for (uint256 i = 0; i < columnIds.length; i++) {
-            // Inline the logic from getPreprocessedColumnIndex since libraries can't call their own external functions
+            // Inline the logic from getPreprocessedColumnIndex since core can't call their own external functions
             PreProcessedColumnId memory columnId = columnIds[i];
             
             // Look for existing column

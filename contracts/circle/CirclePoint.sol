@@ -2,7 +2,7 @@
 pragma solidity ^0.8.20;
 
 import "../fields/QM31Field.sol";
-import "../libraries/KeccakChannelLib.sol";
+import "../core/KeccakChannelLib.sol";
 
 /// @title CirclePoint
 /// @notice A point on the complex circle, treated as an additive group

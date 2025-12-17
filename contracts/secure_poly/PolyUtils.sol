@@ -3,7 +3,7 @@ pragma solidity ^0.8.20;
 
 import "../fields/QM31Field.sol";
 import "../fields/M31Field.sol";
-import "../core/CirclePoint.sol";
+import "../circle/CirclePoint.sol";
 
 /**
  * @title PolyUtils

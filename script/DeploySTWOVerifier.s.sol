@@ -4,9 +4,9 @@ pragma solidity ^0.8.20;
 import {Script} from "forge-std/Script.sol";
 import {console} from "forge-std/console.sol";
 import "../contracts/verifier/StwoVerifier.sol";
-import "../contracts/libraries/ComponentsLib.sol";
-import "../contracts/libraries/FrameworkComponentLib.sol";
-import "../contracts/libraries/TraceLocationAllocatorLib.sol";
+import "../contracts/core/ComponentsLib.sol";
+import "../contracts/core/FrameworkComponentLib.sol";
+import "../contracts/core/TraceLocationAllocatorLib.sol";
 
 /// @title Deploy STWO Verifier Script
 /// @notice Deploys STWO verifier contract to Anvil local network
@@ -27,11 +27,11 @@ contract DeploySTWOVerifier is Script {
 
         vm.startBroadcast(deployerPrivateKey);
 
-        // Deploy external libraries first
-        console.log("Deploying libraries...");
+        // Deploy external core first
+        console.log("Deploying core...");
 
-        // Note: Libraries with only internal functions are embedded automatically
-        // External libraries are deployed separately by Forge
+        // Note: core with only internal functions are embedded automatically
+        // External core are deployed separately by Forge
 
         // Deploy STWO Verifier contract (Forge will handle library linking)
         console.log("Deploying STWO Verifier...");

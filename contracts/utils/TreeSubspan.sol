@@ -14,7 +14,6 @@ library TreeSubspan {
         uint256 colEnd;
     }
 
-    // TreeSubspan Operations
 
     /// @notice Create new TreeSubspan
     /// @param treeIndex Tree index

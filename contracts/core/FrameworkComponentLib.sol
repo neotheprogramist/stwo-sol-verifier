@@ -1,16 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 pragma solidity ^0.8.20;
 
-import "../core/CirclePoint.sol";
-import "../core/CirclePointM31.sol";
-import "../core/PointEvaluationAccumulator.sol";
-import "../core/CanonicCosetM31.sol";
-import "../core/CosetM31.sol";
+import "../circle/CirclePoint.sol";
+import "../circle/CirclePointM31.sol";
+import "../cosets/CanonicCosetM31.sol";
+import "../cosets/CosetM31.sol";
 import "../fields/QM31Field.sol";
-import "../framework/IFrameworkEval.sol";
-import "../framework/PointEvaluatorLib.sol";
-import "../framework/TreeSubspan.sol";
-import "../framework/TreeVecExtensions.sol";
+import "../utils/TreeSubspan.sol";
 import "./TraceLocationAllocatorLib.sol";
 
 /// @title FrameworkComponentLib
@@ -19,11 +15,9 @@ import "./TraceLocationAllocatorLib.sol";
 library FrameworkComponentLib {
     using QM31Field for QM31Field.QM31;
     using TreeSubspan for TreeSubspan.Subspan;
-    using TreeVecExtensions for QM31Field.QM31[][][];
     using TraceLocationAllocatorLib for TraceLocationAllocatorLib.AllocatorState;
     using CanonicCosetM31 for CanonicCosetM31.CanonicCosetStruct;
     using CirclePointM31 for CirclePointM31.Point;
-    using PointEvaluationAccumulator for PointEvaluationAccumulator.Accumulator;
 
 
     uint256 public constant PREPROCESSED_TRACE_IDX = 0;

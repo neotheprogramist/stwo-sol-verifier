@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 pragma solidity ^0.8.20;
 
-import "./CirclePoint.sol";
+import "../circle/CirclePoint.sol";
 import "../fields/QM31Field.sol";
 import "../fields/CM31Field.sol";
 

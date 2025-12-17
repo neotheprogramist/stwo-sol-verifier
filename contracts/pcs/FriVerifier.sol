@@ -2,16 +2,16 @@
 pragma solidity ^0.8.20;
 
 import "../pcs/PcsConfig.sol";
-import "../core/CirclePolyDegreeBound.sol";
-import "../core/CircleDomain.sol";
-import "../core/CanonicCosetM31.sol";
-import "../core/CosetM31.sol";
-import "../core/CirclePoint.sol";
-import "../core/CirclePointM31.sol";
+import "../circle/CirclePolyDegreeBound.sol";
+import "../circle/CircleDomainM31.sol";
+import "../cosets/CanonicCosetM31.sol";
+import "../cosets/CosetM31.sol";
+import "../circle/CirclePoint.sol";
+import "../circle/CirclePointM31.sol";
 import "../fields/QM31Field.sol";
 import "../fields/CM31Field.sol";
 import "../fields/M31Field.sol";
-import "../libraries/KeccakChannelLib.sol";
+import "../core/KeccakChannelLib.sol";
 import "../vcs/MerkleVerifier.sol";
 
 /// @title FriVerifier

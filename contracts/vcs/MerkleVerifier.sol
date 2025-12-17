@@ -588,7 +588,6 @@ library MerkleVerifier {
         return nodeValues;
     }
 
-    // BACKWARD COMPATIBILITY
 
     /// @notice Create verifier (alias for newVerifierSingleTree)
     /// @param root Merkle tree root
