@@ -1,0 +1,15 @@
+[package]
+name = "contracts"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+alloy.workspace = true
+alloy-primitives.workspace = true  
+alloy-sol-types.workspace = true
+serde.workspace = true
+hex.workspace = true
+stwo.workspace = true
+stwo-constraint-framework.workspace = true
+std-shims.workspace = true
+stwo-polynomial.workspace = true
