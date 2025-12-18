@@ -135,20 +135,45 @@ async fn interact_with_verifier(
     println!("\n⚡ Calling contract verify function...");
 
     let verification_call = contract.verify(
-        verifier_input.proof,
-        verifier_input.verificationParams,
-        verifier_input.treeRoots,
-        verifier_input.treeColumnLogSizes,
-        verifier_input.digest,
+        verifier_input.proof.clone(),
+        verifier_input.verificationParams.clone(),
+        verifier_input.treeRoots.clone(),
+        verifier_input.treeColumnLogSizes.clone(),
+        verifier_input.digest.clone(),
         verifier_input.nDraws,
     );
 
-    match verification_call.call().await {
-        Ok(result) => {
-            if result {
-                println!("✅ Verification PASSED! The Fibonacci proof is valid.");
+    // Execute the call and get transaction receipt to track gas
+    match verification_call.send().await {
+        Ok(pending_tx) => {
+            println!("   Transaction sent, waiting for confirmation...");
+            let receipt = pending_tx.get_receipt().await?;
+
+            println!("⛽ Gas Usage Information:");
+            println!("   Gas Used: {}", receipt.gas_used);
+            let gas_price = receipt.effective_gas_price;
+            let gas_cost_wei = receipt.gas_used as u128 * gas_price;
+            let gas_cost_eth = gas_cost_wei as f64 / 1e18;
+            println!("   Gas Price: {} wei", gas_price);
+            println!(
+                "   Total Cost: {} wei ({:.8} ETH)",
+                gas_cost_wei, gas_cost_eth
+            );
+
+            // Check transaction status for verification result
+            if receipt.status() {
+                println!("✅ Verification transaction successful!");
+
+                // To get the actual return value, we need to call the view function
+                let view_result = verification_call.call().await?;
+
+                if view_result {
+                    println!("🎯 Verification PASSED! The Fibonacci proof is valid.");
+                } else {
+                    println!("❌ Verification FAILED! The proof was rejected.");
+                }
             } else {
-                println!("❌ Verification FAILED! The proof was rejected.");
+                println!("💥 Verification transaction failed!");
             }
         }
         Err(e) => {
