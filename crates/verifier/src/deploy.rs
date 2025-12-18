@@ -2,10 +2,10 @@ use alloy::{
     network::EthereumWallet,
     node_bindings::{Anvil, AnvilInstance},
     primitives::Address,
+    providers::Provider,
     providers::ProviderBuilder,
     signers::local::PrivateKeySigner,
     sol,
-    providers::Provider,
 };
 use anyhow::Result;
 
@@ -98,13 +98,8 @@ impl STWOVerifierDeployer {
         let anvil = Self::setup_anvil(&anvil_config)?;
         let private_key = anvil.keys()[0].clone().into();
         let rpc_url = Some(anvil.endpoint());
-        
-        let config = DeployConfig::new(
-            private_key,
-            rpc_url,
-            anvil,
-            anvil_config,
-        );
+
+        let config = DeployConfig::new(private_key, rpc_url, anvil, anvil_config);
 
         Ok(Self { config })
     }
@@ -125,20 +120,20 @@ impl STWOVerifierDeployer {
 
         let anvil = anvil_builder.try_spawn()?;
         println!("⚡ Anvil started on: {}", anvil.endpoint());
-        
+
         Ok(anvil)
     }
 
     /// Deploy STWOVerifier contract
     pub async fn deploy(&self) -> Result<DeploymentResult> {
         println!("🚀 Starting STWO Verifier deployment...");
-        
+
         let provider = self.create_provider().await?;
-        
+
         // Get network info
         let chain_id = provider.get_chain_id().await.ok();
         let block_number = provider.get_block_number().await.ok();
-        
+
         println!("📋 Network info:");
         if let Some(id) = chain_id {
             println!("   Chain ID: {}", id);
@@ -150,10 +145,9 @@ impl STWOVerifierDeployer {
         // Deploy contract
         let deploy_tx = STWOVerifier::deploy(&provider).await?;
         let verifier_address = *deploy_tx.address();
-        
-        
+
         println!("✅ Contract deployed at: {:?}", verifier_address);
-        
+
         // Verify deployment
         self.verify_deployment(verifier_address).await?;
 
@@ -170,21 +164,27 @@ impl STWOVerifierDeployer {
         let provider = ProviderBuilder::new()
             .wallet(wallet)
             .connect_http(self.config.anvil_instance.endpoint_url().clone());
-        
+
         Ok(provider)
     }
 
     /// Get deployment configuration info
     pub fn get_info(&self) -> DeploymentInfo {
-        let rpc_url = self.config.rpc_url
+        let rpc_url = self
+            .config
+            .rpc_url
             .as_ref()
             .unwrap_or(&"http://127.0.0.1:8545".to_string())
             .clone();
-            
+
         DeploymentInfo {
             rpc_url,
             anvil_config: self.config.anvil_config.clone(),
         }
+    }
+
+    pub async fn get_signer(&self) -> Result<PrivateKeySigner> {
+        Ok(self.config.private_key.clone())
     }
 
     /// Verify that deployment was successful
@@ -195,10 +195,6 @@ impl STWOVerifierDeployer {
             anyhow::bail!("❌ Deployment failed - zero address");
         }
 
-        // Additional verification could be added here:
-        // - Check contract code exists
-        // - Call a simple contract function
-        
         println!("✅ Deployment verified successfully");
         Ok(())
     }
@@ -247,7 +243,10 @@ mod tests {
         let result = deployer.deploy().await?;
 
         assert_ne!(result.verifier_address, Address::ZERO);
-        println!("Custom config deployment successful: {:?}", result.verifier_address);
+        println!(
+            "Custom config deployment successful: {:?}",
+            result.verifier_address
+        );
 
         Ok(())
     }
