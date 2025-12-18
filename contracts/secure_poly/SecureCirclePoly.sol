@@ -66,7 +66,7 @@ library SecureCirclePoly {
      * @return result The evaluation result as QM31 element
      */
     function evalAtPoint(SecurePoly memory poly, CirclePoint.Point memory point) 
-        public pure returns (QM31Field.QM31 memory result) {
+        internal pure returns (QM31Field.QM31 memory result) {
         
         // Evaluate each coordinate polynomial at the point
         QM31Field.QM31[4] memory evals = [
@@ -88,7 +88,7 @@ library SecureCirclePoly {
      * @return evals Array of 4 evaluations
      */
     function evalColumnsAtPoint(SecurePoly memory poly, CirclePoint.Point memory point) 
-        public pure returns (QM31Field.QM31[4] memory evals) {
+        internal pure returns (QM31Field.QM31[4] memory evals) {
         
         return [
             evalCirclePolyAtPoint(poly.coeffs0, point),
@@ -109,7 +109,7 @@ library SecureCirclePoly {
     function evalCirclePolyAtPoint(
         uint32[] memory coeffs, 
         CirclePoint.Point memory point
-    ) public pure returns (QM31Field.QM31 memory) {
+    ) internal pure returns (QM31Field.QM31 memory) {
         
         // Calculate log size from coefficient length
         uint32 logSizeConst = uint32(_log2(coeffs.length));
@@ -131,7 +131,7 @@ library SecureCirclePoly {
      * @param poly The secure polynomial
      * @return The maximum log size
      */
-    function logSize(SecurePoly memory poly) public pure returns (uint32) {
+    function logSize(SecurePoly memory poly) internal pure returns (uint32) {
         uint32 logSize0 = uint32(_log2(poly.coeffs0.length));
         uint32 logSize1 = uint32(_log2(poly.coeffs1.length));
         uint32 logSize2 = uint32(_log2(poly.coeffs2.length));
