@@ -27,13 +27,8 @@ contract DeploySTWOVerifier is Script {
 
         vm.startBroadcast(deployerPrivateKey);
 
-        // Deploy external core first
+        // Deploy internal core first
         console.log("Deploying core...");
-
-        // Note: core with only internal functions are embedded automatically
-        // External core are deployed separately by Forge
-
-        // Deploy STWO Verifier contract (Forge will handle library linking)
         console.log("Deploying STWO Verifier...");
         STWOVerifier verifier = new STWOVerifier();
 
