@@ -44,7 +44,7 @@ library TraceLocationAllocatorLib {
 
     /// @notice Initialize allocator with dynamic preprocessed columns
     /// @param state The allocator state to initialize
-    function initialize(AllocatorState storage state) external {
+    function initialize(AllocatorState storage state) internal {
         require(!state.isInitialized, "Allocator already initialized");
         
         state.preprocessedColumnsAllocationMode = PreprocessedColumnsAllocationMode.Dynamic;
@@ -58,7 +58,7 @@ library TraceLocationAllocatorLib {
     function initializeWithPreprocessedColumns(
         AllocatorState storage state,
         PreProcessedColumnId[] memory _preprocessedColumns
-    ) external {
+    ) internal {
         require(!state.isInitialized, "Allocator already initialized");
         require(
             state.preprocessedColumns.length == 0, 
@@ -93,7 +93,7 @@ library TraceLocationAllocatorLib {
         AllocatorState storage state,
         uint256[] memory treeSizes,
         uint256 /* componentId */
-    ) external returns (TreeSubspan.Subspan[] memory traceLocations) {
+    ) internal returns (TreeSubspan.Subspan[] memory traceLocations) {
         require(state.isInitialized, "Allocator not initialized");
         
         uint256 requiredTrees = treeSizes.length;
@@ -126,7 +126,7 @@ library TraceLocationAllocatorLib {
     function getPreprocessedColumnIndex(
         AllocatorState storage state,
         PreProcessedColumnId memory columnId
-    ) external returns (uint256 columnIndex) {
+    ) internal returns (uint256 columnIndex) {
         require(state.isInitialized, "Allocator not initialized");
         
         // Look for existing column
@@ -155,13 +155,13 @@ library TraceLocationAllocatorLib {
     function getPreprocessedColumnIndices(
         AllocatorState storage state,
         PreProcessedColumnId[] memory columnIds
-    ) external returns (uint256[] memory columnIndices) {
+    ) internal returns (uint256[] memory columnIndices) {
         require(state.isInitialized, "Allocator not initialized");
         
         columnIndices = new uint256[](columnIds.length);
         
         for (uint256 i = 0; i < columnIds.length; i++) {
-            // Inline the logic from getPreprocessedColumnIndex since core can't call their own external functions
+            // Inline the logic from getPreprocessedColumnIndex since core can't call their own internal functions
             PreProcessedColumnId memory columnId = columnIds[i];
             
             // Look for existing column
@@ -195,7 +195,7 @@ library TraceLocationAllocatorLib {
     /// @param state The allocator state
     /// @return columns Array of all preprocessed columns
     function getPreprocessedColumns(AllocatorState storage state) 
-        external 
+        internal 
         view 
         returns (PreProcessedColumnId[] memory columns) 
     {
@@ -210,7 +210,7 @@ library TraceLocationAllocatorLib {
     function getPreprocessedColumn(
         AllocatorState storage state,
         uint256 index
-    ) external view returns (PreProcessedColumnId memory column) {
+    ) internal view returns (PreProcessedColumnId memory column) {
         require(state.isInitialized, "Allocator not initialized");
         require(index < state.preprocessedColumns.length, "Index out of bounds");
         return state.preprocessedColumns[index];
@@ -223,7 +223,7 @@ library TraceLocationAllocatorLib {
     function getNextTreeOffset(
         AllocatorState storage state,
         uint256 treeIndex
-    ) external view returns (uint256 nextOffset) {
+    ) internal view returns (uint256 nextOffset) {
         require(state.isInitialized, "Allocator not initialized");
         return state.nextTreeOffsets[treeIndex];
     }
@@ -232,7 +232,7 @@ library TraceLocationAllocatorLib {
     /// @param state The allocator state
     /// @return count Number of preprocessed columns
     function getPreprocessedColumnsCount(AllocatorState storage state) 
-        external 
+        internal 
         view 
         returns (uint256 count) 
     {
@@ -244,7 +244,7 @@ library TraceLocationAllocatorLib {
     /// @param state The allocator state
     /// @return mode Current allocation mode
     function getAllocationMode(AllocatorState storage state) 
-        external 
+        internal 
         view 
         returns (PreprocessedColumnsAllocationMode mode) 
     {
@@ -258,7 +258,7 @@ library TraceLocationAllocatorLib {
     /// @return treeOffsets Current offsets for each tree
     /// @return totalPreprocessedColumns Number of preprocessed columns
     function getAllocationSummary(AllocatorState storage state)
-        external
+        internal
         view
         returns (
             uint256 totalTrees,
@@ -287,7 +287,7 @@ library TraceLocationAllocatorLib {
     function validatePreprocessedColumns(
         AllocatorState storage state,
         PreProcessedColumnId[] memory expectedColumns
-    ) external view returns (bool isValid, string memory errorMessage) {
+    ) internal view returns (bool isValid, string memory errorMessage) {
         require(state.isInitialized, "Allocator not initialized");
         
         if (state.preprocessedColumns.length != expectedColumns.length) {
@@ -324,7 +324,7 @@ library TraceLocationAllocatorLib {
 
     /// @notice Reset allocator state (for testing)
     /// @param state The allocator state
-    function reset(AllocatorState storage state) external {
+    function reset(AllocatorState storage state) internal {
         require(state.isInitialized, "Allocator not initialized");
         
         for (uint256 i = 0; i < state.numTrees; i++) {
@@ -341,7 +341,7 @@ library TraceLocationAllocatorLib {
     /// @notice Check if allocator is initialized
     /// @param state The allocator state
     /// @return initialized True if allocator is initialized
-    function isInitialized(AllocatorState storage state) external view returns (bool initialized) {
+    function isInitialized(AllocatorState storage state) internal view returns (bool initialized) {
         return state.isInitialized;
     }
 
@@ -349,7 +349,7 @@ library TraceLocationAllocatorLib {
     /// @param state The allocator state
     /// @return length Number of preprocessed columns
     function getPreprocessedColumnsLength(AllocatorState storage state) 
-        external view returns (uint256 length) {
+        internal view returns (uint256 length) {
         return state.preprocessedColumns.length;
     }
 
@@ -360,7 +360,7 @@ library TraceLocationAllocatorLib {
     /// @return found Whether column was found
     /// @return position Position/index of the column if found
     function findPreprocessedColumn(AllocatorState storage state, uint256 columnId) 
-        external view returns (bool found, uint256 position) {
+        internal view returns (bool found, uint256 position) {
         string memory columnIdStr = _uint256ToString(columnId);
         
         for (uint256 i = 0; i < state.preprocessedColumns.length; i++) {
@@ -376,7 +376,7 @@ library TraceLocationAllocatorLib {
     /// @param state The allocator state
     /// @return isStatic True if in static mode
     function isStaticAllocationMode(AllocatorState storage state) 
-        external view returns (bool isStatic) {
+        internal view returns (bool isStatic) {
         return state.preprocessedColumnsAllocationMode == PreprocessedColumnsAllocationMode.Static;
     }
 
@@ -384,7 +384,7 @@ library TraceLocationAllocatorLib {
     /// @dev Rust: location_allocator.preprocessed_columns.push(col.clone())
     /// @param state The allocator state
     /// @param columnId The column ID to add
-    function addPreprocessedColumn(AllocatorState storage state, uint256 columnId) external {
+    function addPreprocessedColumn(AllocatorState storage state, uint256 columnId) internal {
         require(state.isInitialized, "Allocator not initialized");
         require(
             state.preprocessedColumnsAllocationMode == PreprocessedColumnsAllocationMode.Dynamic,
@@ -415,7 +415,7 @@ library TraceLocationAllocatorLib {
     function initializeWithPreprocessedColumns(
         AllocatorState storage state, 
         uint256[] memory columnIds
-    ) external {
+    ) internal {
         require(!state.isInitialized, "Allocator already initialized");
 
         // Check for duplicates

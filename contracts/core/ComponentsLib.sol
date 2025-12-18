@@ -38,7 +38,7 @@ library ComponentsLib {
 
     /// @notice Reset components to uninitialized state
     /// @param components_ The components struct to reset
-    function reset(Components storage components_) external {
+    function reset(Components storage components_) internal {
         delete components_.components;
         components_.nPreprocessedColumns = 0;
         components_.isInitialized = false;
@@ -52,7 +52,7 @@ library ComponentsLib {
         Components storage components_,
         FrameworkComponentLib.ComponentState[] memory componentStates,
         uint256 nPreprocessedColumns_
-    ) external {  
+    ) internal {  
         require(!components_.isInitialized, "Components already initialized");
 
         require(componentStates.length > 0, "No components provided");
@@ -88,7 +88,7 @@ library ComponentsLib {
     /// @return maxBound Maximum constraint log degree bound across all components
     function compositionLogDegreeBound(
         Components storage components_
-    ) external view returns (uint32 maxBound) {
+    ) internal view returns (uint32 maxBound) {
         require(components_.isInitialized, "Components not initialized");
         require(components_.components.length > 0, "No components available");
 
@@ -116,7 +116,7 @@ library ComponentsLib {
     function maskPoints(
         Components storage components_,
         CirclePoint.Point memory point
-    ) external view returns (FrameworkComponentLib.SamplePoints[] memory componentMaskPoints) {
+    ) internal view returns (FrameworkComponentLib.SamplePoints[] memory componentMaskPoints) {
 
         require(components_.isInitialized, "Components not initialized");
 
@@ -139,7 +139,7 @@ library ComponentsLib {
     /// @return count Number of components
     function getComponentCount(
         Components storage components_
-    ) external view returns (uint256 count) {
+    ) internal view returns (uint256 count) {
         require(components_.isInitialized, "Components not initialized");
         return components_.components.length;
     }
@@ -151,7 +151,7 @@ library ComponentsLib {
     function getComponent(
         Components storage components_,
         uint256 index
-    ) external view returns (FrameworkComponentLib.ComponentState memory componentState) {
+    ) internal view returns (FrameworkComponentLib.ComponentState memory componentState) {
         require(components_.isInitialized, "Components not initialized");
         require(index < components_.components.length, "Component index out of bounds");
         
@@ -163,37 +163,15 @@ library ComponentsLib {
     /// @return count Number of preprocessed columns
     function getPreprocessedColumnCount(
         Components storage components_
-    ) external view returns (uint256 count) {
+    ) internal view returns (uint256 count) {
         require(components_.isInitialized, "Components not initialized");
         return components_.nPreprocessedColumns;
     }
 
 
-    /// @notice Validate all components
-    /// @param components_ The components struct
-    /// @return isValid True if all components are valid
-    /// @return errorMessage Error message if any component is invalid
-    function validateAllComponents(
-        Components storage components_
-    ) external view returns (bool isValid, string memory errorMessage) {
-        require(components_.isInitialized, "Components not initialized");
-        
-        for (uint256 i = 0; i < components_.components.length; i++) {
-            (bool componentValid, string memory componentError) = FrameworkComponentLib.validateComponent(
-                components_.components[i]
-            );
-            
-            if (!componentValid) {
-                return (false, string(abi.encodePacked("Component ", _toString(i), ": ", componentError)));
-            }
-        }
-        
-        return (true, "All components valid");
-    }
-
     /// @notice Clear components structure
     /// @param components_ The components struct to clear
-    function clear(Components storage components_) external {
+    function clear(Components storage components_) internal {
         require(components_.isInitialized, "Components not initialized");
         
         // Clear all component states

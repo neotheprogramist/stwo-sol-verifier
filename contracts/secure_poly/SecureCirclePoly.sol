@@ -42,7 +42,7 @@ library SecureCirclePoly {
         uint32[] memory coeffs1,
         uint32[] memory coeffs2,
         uint32[] memory coeffs3
-    ) public pure returns (SecurePoly memory poly) {
+    ) internal pure returns (SecurePoly memory poly) {
         // Each coordinate can have different length, but each must be power of 2
         require(coeffs0.length > 0 && (coeffs0.length & (coeffs0.length - 1)) == 0, "coeffs0 length must be power of 2");
         require(coeffs1.length > 0 && (coeffs1.length & (coeffs1.length - 1)) == 0, "coeffs1 length must be power of 2");

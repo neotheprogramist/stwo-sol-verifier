@@ -63,7 +63,7 @@ library FrameworkComponentLib {
         QM31Field.QM31 memory claimedSum,
         ComponentInfo memory info
     )
-        external
+        internal
         returns (
             ComponentState memory stateUpdated
         )
@@ -161,7 +161,7 @@ library FrameworkComponentLib {
         uint256[] memory _preprocessedColumnIndices,
         QM31Field.QM31 memory _claimedSum,
         ComponentInfo memory _componentInfo
-    ) external {
+    ) internal {
         require(!state.isInitialized, "Component already initialized");
         require(_traceLocations.length > 0, "No trace locations provided");
         require(_componentInfo.logSize > 0, "Invalid log size");
@@ -187,7 +187,7 @@ library FrameworkComponentLib {
     /// @return maxLogDegreeBound Maximum constraint log degree bound
     function maxConstraintLogDegreeBound(
         ComponentState storage state
-    ) external view returns (uint32 maxLogDegreeBound) {
+    ) internal view returns (uint32 maxLogDegreeBound) {
         require(state.isInitialized, "Component not initialized");
         return state.info.maxConstraintLogDegreeBound;
     }
@@ -197,7 +197,7 @@ library FrameworkComponentLib {
     /// @return bounds Trace log degree bounds for each tree
     function traceLogDegreeBounds(
         ComponentState storage state
-    ) external view returns (uint32[][] memory bounds) {
+    ) internal view returns (uint32[][] memory bounds) {
         require(state.isInitialized, "Component not initialized");
 
         bounds = new uint32[][](state.traceLocations.length);
@@ -229,7 +229,7 @@ library FrameworkComponentLib {
     function maskPoints(
         ComponentState storage state,
         CirclePoint.Point memory point
-    ) external view returns (SamplePoints memory samplePoints) {
+    ) internal view returns (SamplePoints memory samplePoints) {
         require(state.isInitialized, "Component not initialized");
 
         CirclePointM31.Point memory traceStepM31 = _getTraceStep(state.logSize);
@@ -382,20 +382,9 @@ library FrameworkComponentLib {
     /// @return indices Preprocessed column indices
     function preprocessedColumnIndices(
         ComponentState storage state
-    ) external view returns (uint256[] memory indices) {
+    ) internal view returns (uint256[] memory indices) {
         require(state.isInitialized, "Component not initialized");
         return state.preprocessedColumnIndices;
-    }
-
-
-    /// @notice Validate component configuration
-    /// @param state The component state
-    /// @return isValid True if component is valid
-    /// @return errorMessage Error message if invalid
-    function validateConfiguration(
-        ComponentState storage state
-    ) external view returns (bool isValid, string memory errorMessage) {
-        return validateComponent(state);
     }
 
 
@@ -404,7 +393,7 @@ library FrameworkComponentLib {
     /// @return locations Array of trace locations
     function getTraceLocations(
         ComponentState storage state
-    ) external view returns (TreeSubspan.Subspan[] memory locations) {
+    ) internal view returns (TreeSubspan.Subspan[] memory locations) {
         require(state.isInitialized, "Component not initialized");
         return state.traceLocations;
     }
@@ -414,7 +403,7 @@ library FrameworkComponentLib {
     /// @return indices Array of preprocessed column indices
     function getPreprocessedColumnIndices(
         ComponentState storage state
-    ) external view returns (uint256[] memory indices) {
+    ) internal view returns (uint256[] memory indices) {
         require(state.isInitialized, "Component not initialized");
         return state.preprocessedColumnIndices;
     }
@@ -424,7 +413,7 @@ library FrameworkComponentLib {
     /// @return sum Claimed sum for logup constraints
     function getClaimedSum(
         ComponentState storage state
-    ) external view returns (QM31Field.QM31 memory sum) {
+    ) internal view returns (QM31Field.QM31 memory sum) {
         require(state.isInitialized, "Component not initialized");
         return state.claimedSum;
     }
@@ -434,14 +423,14 @@ library FrameworkComponentLib {
     /// @return componentInfo Complete component information
     function getInfo(
         ComponentState storage state
-    ) external view returns (ComponentInfo memory componentInfo) {
+    ) internal view returns (ComponentInfo memory componentInfo) {
         require(state.isInitialized, "Component not initialized");
         return state.info;
     }
 
     /// @notice Clear component state after use
     /// @param state The component state to clear
-    function clearState(ComponentState storage state) external {
+    function clearState(ComponentState storage state) internal {
         require(state.isInitialized, "Component not initialized");
 
         delete state.traceLocations;
@@ -452,29 +441,6 @@ library FrameworkComponentLib {
         delete state.info;
         state.isInitialized = false;
     }
-
-    /// @notice Validate component consistency
-    /// @param state The component state
-    /// @return isValid True if component is properly configured
-    /// @return errorMessage Error description if invalid
-    function validateComponent(
-        ComponentState storage state
-    ) public view returns (bool isValid, string memory errorMessage) {
-        if (!state.isInitialized) {
-            return (false, "Component not initialized");
-        }
-
-        if (state.traceLocations.length == 0) {
-            return (false, "No trace locations allocated");
-        }
-
-        if (state.info.logSize == 0) {
-            return (false, "Invalid log size");
-        }
-
-        return (true, "Component validation passed");
-    }
-
 
     function _calculateVanishingInverse(
         CosetM31.CosetStruct memory coset,
