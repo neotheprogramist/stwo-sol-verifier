@@ -50,60 +50,166 @@ library CM31Field {
     }
 
     /// @notice Addition in CM31 field
-    function add(CM31 memory a, CM31 memory b) internal pure returns (CM31 memory) {
-        return CM31(
-            M31Field.add(a.real, b.real),
-            M31Field.add(a.imag, b.imag)
-        );
+    function add(CM31 memory a, CM31 memory b) internal pure returns (CM31 memory result) {
+        assembly ("memory-safe") {
+            let aReal := mload(a)
+            let aImag := mload(add(a, 0x20))
+            let bReal := mload(b)
+            let bImag := mload(add(b, 0x20))
+            
+            let realSum := add(aReal, bReal)
+            let realIsGTE := iszero(lt(realSum, 0x7fffffff))
+            let realResult := sub(realSum, mul(realIsGTE, 0x7fffffff))
+            
+            let imagSum := add(aImag, bImag)
+            let imagIsGTE := iszero(lt(imagSum, 0x7fffffff))
+            let imagResult := sub(imagSum, mul(imagIsGTE, 0x7fffffff))
+            
+            result := mload(0x40)
+            mstore(result, realResult)
+            mstore(add(result, 0x20), imagResult)
+            mstore(0x40, add(result, 0x40))
+        }
     }
 
     /// @notice Subtraction in CM31 field
-    function sub(CM31 memory a, CM31 memory b) internal pure returns (CM31 memory) {
-        return CM31(
-            M31Field.sub(a.real, b.real),
-            M31Field.sub(a.imag, b.imag)
-        );
+    function sub(CM31 memory a, CM31 memory b) internal pure returns (CM31 memory result) {
+        assembly ("memory-safe") {
+            let aReal := mload(a)
+            let aImag := mload(add(a, 0x20))
+            let bReal := mload(b)
+            let bImag := mload(add(b, 0x20))
+            
+            let realDiff := add(sub(aReal, bReal), 0x7fffffff)
+            let realIsGTE := iszero(lt(realDiff, 0x7fffffff))
+            let realResult := sub(realDiff, mul(realIsGTE, 0x7fffffff))
+            
+            let imagDiff := add(sub(aImag, bImag), 0x7fffffff)
+            let imagIsGTE := iszero(lt(imagDiff, 0x7fffffff))
+            let imagResult := sub(imagDiff, mul(imagIsGTE, 0x7fffffff))
+            
+            result := mload(0x40)
+            mstore(result, realResult)
+            mstore(add(result, 0x20), imagResult)
+            mstore(0x40, add(result, 0x40))
+        }
     }
 
     /// @notice Negation in CM31 field
-    function neg(CM31 memory a) internal pure returns (CM31 memory) {
-        return CM31(
-            M31Field.neg(a.real),
-            M31Field.neg(a.imag)
-        );
+    function neg(CM31 memory a) internal pure returns (CM31 memory result) {
+        assembly ("memory-safe") {
+            let aReal := mload(a)
+            let aImag := mload(add(a, 0x20))
+            
+            // Negate real part
+            let realIsZero := iszero(aReal)
+            let realNegValue := sub(0x7fffffff, aReal)
+            let realIsGTE := iszero(lt(realNegValue, 0x7fffffff))
+            let realResult := mul(iszero(realIsZero), sub(realNegValue, mul(realIsGTE, 0x7fffffff)))
+            
+            // Negate imag part
+            let imagIsZero := iszero(aImag)
+            let imagNegValue := sub(0x7fffffff, aImag)
+            let imagIsGTE := iszero(lt(imagNegValue, 0x7fffffff))
+            let imagResult := mul(iszero(imagIsZero), sub(imagNegValue, mul(imagIsGTE, 0x7fffffff)))
+            
+            result := mload(0x40)
+            mstore(result, realResult)
+            mstore(add(result, 0x20), imagResult)
+            mstore(0x40, add(result, 0x40))
+        }
     }
 
     /// @notice Multiplication in CM31 field: (a + bi) * (c + di) = (ac - bd) + (ad + bc)i
-    function mul(CM31 memory a, CM31 memory b) internal pure returns (CM31 memory) {
-        uint32 realPart = M31Field.sub(
-            M31Field.mul(a.real, b.real),
-            M31Field.mul(a.imag, b.imag)
-        );
-        
-        uint32 imagPart = M31Field.add(
-            M31Field.mul(a.real, b.imag),
-            M31Field.mul(a.imag, b.real)
-        );
-        
-        return CM31(realPart, imagPart);
+    function mul(CM31 memory a, CM31 memory b) internal pure returns (CM31 memory result) {
+        assembly ("memory-safe") {
+            let aReal := mload(a)
+            let aImag := mload(add(a, 0x20))
+            let bReal := mload(b)
+            let bImag := mload(add(b, 0x20))
+            
+            // ac
+            let ac := mul(aReal, bReal)
+            let ac_step1 := add(add(shr(31, ac), ac), 1)
+            let ac_step2 := add(shr(31, ac_step1), ac)
+            let ac_reduced := and(ac_step2, 0x7fffffff)
+            
+            // bd  
+            let bd := mul(aImag, bImag)
+            let bd_step1 := add(add(shr(31, bd), bd), 1)
+            let bd_step2 := add(shr(31, bd_step1), bd)
+            let bd_reduced := and(bd_step2, 0x7fffffff)
+            
+            // ac - bd
+            let realDiff := add(sub(ac_reduced, bd_reduced), 0x7fffffff)
+            let realIsGTE := iszero(lt(realDiff, 0x7fffffff))
+            let realResult := sub(realDiff, mul(realIsGTE, 0x7fffffff))
+            
+            // ad
+            let ad := mul(aReal, bImag)
+            let ad_step1 := add(add(shr(31, ad), ad), 1)
+            let ad_step2 := add(shr(31, ad_step1), ad)
+            let ad_reduced := and(ad_step2, 0x7fffffff)
+            
+            // bc
+            let bc := mul(aImag, bReal)
+            let bc_step1 := add(add(shr(31, bc), bc), 1)
+            let bc_step2 := add(shr(31, bc_step1), bc)
+            let bc_reduced := and(bc_step2, 0x7fffffff)
+            
+            // ad + bc
+            let imagSum := add(ad_reduced, bc_reduced)
+            let imagIsGTE := iszero(lt(imagSum, 0x7fffffff))
+            let imagResult := sub(imagSum, mul(imagIsGTE, 0x7fffffff))
+            
+            result := mload(0x40)
+            mstore(result, realResult)
+            mstore(add(result, 0x20), imagResult)
+            mstore(0x40, add(result, 0x40))
+        }
     }
 
     /// @notice Square operation in CM31 field
     /// @param a Value to square
-    /// @return Square a²
-    function square(CM31 memory a) internal pure returns (CM31 memory) {
+    /// @return result Square a²
+    function square(CM31 memory a) internal pure returns (CM31 memory result) {
         // (a + bi)² = (a² - b²) + (2ab)i
-        uint32 realPart = M31Field.sub(
-            M31Field.square(a.real),
-            M31Field.square(a.imag)
-        );
-        
-        uint32 imagPart = M31Field.mul(
-            M31Field.mul(2, a.real),
-            a.imag
-        );
-        
-        return CM31(realPart, imagPart);
+        assembly ("memory-safe") {
+            let aReal := mload(a)
+            let aImag := mload(add(a, 0x20))
+            
+            // a²
+            let aSquared := mul(aReal, aReal)
+            let aSquared_step1 := add(add(shr(31, aSquared), aSquared), 1)
+            let aSquared_step2 := add(shr(31, aSquared_step1), aSquared)
+            let aSquared_reduced := and(aSquared_step2, 0x7fffffff)
+            
+            // b²
+            let bSquared := mul(aImag, aImag)
+            let bSquared_step1 := add(add(shr(31, bSquared), bSquared), 1)
+            let bSquared_step2 := add(shr(31, bSquared_step1), bSquared)
+            let bSquared_reduced := and(bSquared_step2, 0x7fffffff)
+            
+            // a² - b²
+            let realDiff := add(sub(aSquared_reduced, bSquared_reduced), 0x7fffffff)
+            let realIsGTE := iszero(lt(realDiff, 0x7fffffff))
+            let realResult := sub(realDiff, mul(realIsGTE, 0x7fffffff))
+            
+            // 2ab
+            let twoA := add(aReal, aReal)
+            let twoAIsGTE := iszero(lt(twoA, 0x7fffffff))
+            let twoA_reduced := sub(twoA, mul(twoAIsGTE, 0x7fffffff))
+            
+            let imagProduct := mul(twoA_reduced, aImag)
+            let imagProduct_step1 := add(add(shr(31, imagProduct), imagProduct), 1)
+            let imagProduct_step2 := add(shr(31, imagProduct_step1), imagProduct)
+            let imagResult := and(imagProduct_step2, 0x7fffffff)
+            
+            result := mload(0x40)
+            mstore(result, realResult)
+            mstore(add(result, 0x20), imagResult)
+            mstore(0x40, add(result, 0x40))
+        }
     }
 
     /// @notice Complex conjugate
@@ -115,19 +221,36 @@ library CM31Field {
 
     /// @notice Norm of complex number (a² + b²)
     /// @param a Complex number
-    /// @return Norm |a|² = real² + imag²
-    function norm(CM31 memory a) internal pure returns (uint32) {
-        return M31Field.add(
-            M31Field.square(a.real),
-            M31Field.square(a.imag)
-        );
+    /// @return result Norm |a|² = real² + imag²
+    function norm(CM31 memory a) internal pure returns (uint32 result) {
+        assembly ("memory-safe") {
+            let aReal := mload(a)
+            let aImag := mload(add(a, 0x20))
+            
+            // real²
+            let realSquared := mul(aReal, aReal)
+            let realSquared_step1 := add(add(shr(31, realSquared), realSquared), 1)
+            let realSquared_step2 := add(shr(31, realSquared_step1), realSquared)
+            let realSquared_reduced := and(realSquared_step2, 0x7fffffff)
+            
+            // imag²
+            let imagSquared := mul(aImag, aImag)
+            let imagSquared_step1 := add(add(shr(31, imagSquared), imagSquared), 1)
+            let imagSquared_step2 := add(shr(31, imagSquared_step1), imagSquared)
+            let imagSquared_reduced := and(imagSquared_step2, 0x7fffffff)
+            
+            // real² + imag²
+            let normSum := add(realSquared_reduced, imagSquared_reduced)
+            let normIsGTE := iszero(lt(normSum, 0x7fffffff))
+            result := sub(normSum, mul(normIsGTE, 0x7fffffff))
+        }
     }
 
     /// @notice Multiplicative inverse in CM31 field
     /// @param a Value to invert (must be non-zero)
-    /// @return Inverse a⁻¹ such that a * a⁻¹ = 1
+    /// @return result Inverse a⁻¹ such that a * a⁻¹ = 1
     /// @dev 1/(a + bi) = (a - bi)/(a² + b²)
-    function inverse(CM31 memory a) internal pure returns (CM31 memory) {
+    function inverse(CM31 memory a) internal pure returns (CM31 memory result) {
         if (isZero(a)) {
             revert("CM31Field: division by zero");
         }
@@ -135,10 +258,32 @@ library CM31Field {
         uint32 normValue = norm(a);
         uint32 normInverse = M31Field.inverse(normValue);
         
-        return CM31(
-            M31Field.mul(a.real, normInverse),
-            M31Field.mul(M31Field.neg(a.imag), normInverse)
-        );
+        assembly ("memory-safe") {
+            let aReal := mload(a)
+            let aImag := mload(add(a, 0x20))
+            
+            // a.real * normInverse
+            let realProduct := mul(aReal, normInverse)
+            let realProduct_step1 := add(add(shr(31, realProduct), realProduct), 1)
+            let realProduct_step2 := add(shr(31, realProduct_step1), realProduct)
+            let realResult := and(realProduct_step2, 0x7fffffff)
+            
+            // -a.imag * normInverse
+            let imagIsZero := iszero(aImag)
+            let imagNegValue := sub(0x7fffffff, aImag)
+            let imagIsGTE := iszero(lt(imagNegValue, 0x7fffffff))
+            let negImag := mul(iszero(imagIsZero), sub(imagNegValue, mul(imagIsGTE, 0x7fffffff)))
+            
+            let imagProduct := mul(negImag, normInverse)
+            let imagProduct_step1 := add(add(shr(31, imagProduct), imagProduct), 1)
+            let imagProduct_step2 := add(shr(31, imagProduct_step1), imagProduct)
+            let imagResult := and(imagProduct_step2, 0x7fffffff)
+            
+            result := mload(0x40)
+            mstore(result, realResult)
+            mstore(add(result, 0x20), imagResult)
+            mstore(0x40, add(result, 0x40))
+        }
     }
 
     /// @notice Division in CM31 field
@@ -204,12 +349,29 @@ library CM31Field {
     /// @notice Multiplication with M31 element (scalar multiplication)
     /// @param a CM31 element
     /// @param b M31 scalar
-    /// @return Product a * b
-    function mulScalar(CM31 memory a, uint32 b) internal pure returns (CM31 memory) {
-        return CM31(
-            M31Field.mul(a.real, b),
-            M31Field.mul(a.imag, b)
-        );
+    /// @return result Product a * b
+    function mulScalar(CM31 memory a, uint32 b) internal pure returns (CM31 memory result) {
+        assembly ("memory-safe") {
+            let aReal := mload(a)
+            let aImag := mload(add(a, 0x20))
+            
+            // real * b
+            let realProduct := mul(aReal, b)
+            let realProduct_step1 := add(add(shr(31, realProduct), realProduct), 1)
+            let realProduct_step2 := add(shr(31, realProduct_step1), realProduct)
+            let realResult := and(realProduct_step2, 0x7fffffff)
+            
+            // imag * b
+            let imagProduct := mul(aImag, b)
+            let imagProduct_step1 := add(add(shr(31, imagProduct), imagProduct), 1)
+            let imagProduct_step2 := add(shr(31, imagProduct_step1), imagProduct)
+            let imagResult := and(imagProduct_step2, 0x7fffffff)
+            
+            result := mload(0x40)
+            mstore(result, realResult)
+            mstore(add(result, 0x20), imagResult)
+            mstore(0x40, add(result, 0x40))
+        }
     }
 
     /// @notice Division by M31 element (scalar division)

@@ -23,45 +23,68 @@ library M31Field {
     }
     
     /// @notice Reduces val modulo P when val is in range [0, 2P)
-    function partialReduce(uint32 val) internal pure returns (uint32) {
-        if (val >= MODULUS) {
-            return val - MODULUS;
+    function partialReduce(uint32 val) internal pure returns (uint32 result) {
+        assembly ("memory-safe") {
+            let isGTE := iszero(lt(val, 0x7fffffff))
+            result := sub(val, mul(isGTE, 0x7fffffff))
         }
-        return val;
     }
     
     /// @notice Reduces val modulo P when val is in range [0, P^2)
-    function reduce(uint64 val) internal pure returns (uint32) {
-        uint64 step1 = (val >> MODULUS_BITS) + val + 1;
-        uint64 step2 = (step1 >> MODULUS_BITS) + val;
-        return uint32(step2 & uint64(MODULUS));
+    function reduce(uint64 val) internal pure returns (uint32 result) {
+        assembly ("memory-safe") {
+            let step1 := add(add(shr(31, val), val), 1)
+            let step2 := add(shr(31, step1), val)
+            result := and(step2, 0x7fffffff)
+        }
     }
     
     /// @notice Addition in M31 field
-    function add(uint32 a, uint32 b) internal pure returns (uint32) {
-        return partialReduce(a + b);
+    function add(uint32 a, uint32 b) internal pure returns (uint32 result) {
+        assembly ("memory-safe") {
+            let sum := add(a, b)
+            let isGTE := iszero(lt(sum, 0x7fffffff))
+            result := sub(sum, mul(isGTE, 0x7fffffff))
+        }
     }
     
     /// @notice Subtraction in M31 field
-    function sub(uint32 a, uint32 b) internal pure returns (uint32) {
-        return partialReduce(a + MODULUS - b);
+    function sub(uint32 a, uint32 b) internal pure returns (uint32 result) {
+        assembly ("memory-safe") {
+            let diff := add(sub(a, b), 0x7fffffff)
+            let isGTE := iszero(lt(diff, 0x7fffffff))
+            result := sub(diff, mul(isGTE, 0x7fffffff))
+        }
     }
     
     /// @notice Negation in M31 field
-    function neg(uint32 a) internal pure returns (uint32) {
-        if (a == 0) return 0;
-        
-        return partialReduce(MODULUS - a);
+    function neg(uint32 a) internal pure returns (uint32 result) {
+        assembly ("memory-safe") {
+            let isZero := iszero(a)
+            let negValue := sub(0x7fffffff, a)
+            let isGTE := iszero(lt(negValue, 0x7fffffff))
+            result := mul(iszero(isZero), sub(negValue, mul(isGTE, 0x7fffffff)))
+        }
     }
     
     /// @notice Multiplication in M31 field
-    function mul(uint32 a, uint32 b) internal pure returns (uint32) {
-        return reduce(uint64(a) * uint64(b));
+    function mul(uint32 a, uint32 b) internal pure returns (uint32 result) {
+        assembly ("memory-safe") {
+            let product := mul(a, b)
+            let step1 := add(add(shr(31, product), product), 1)
+            let step2 := add(shr(31, step1), product)
+            result := and(step2, 0x7fffffff)
+        }
     }
     
     /// @notice Square operation in M31 field
-    function square(uint32 a) internal pure returns (uint32) {
-        return reduce(uint64(a) * uint64(a));
+    function square(uint32 a) internal pure returns (uint32 result) {
+        assembly ("memory-safe") {
+            let product := mul(a, a)
+            let step1 := add(add(shr(31, product), product), 1)
+            let step2 := add(shr(31, step1), product)
+            result := and(step2, 0x7fffffff)
+        }
     }
     
     /// @notice Multiplicative inverse in M31 field using a^(P-2) mod P
@@ -73,13 +96,18 @@ library M31Field {
     }
     
     /// @notice Convert signed 32-bit integer to M31 field element
-    function fromI32(int32 value) internal pure returns (uint32) {
-        if (value < 0) {
-            uint64 absValue = uint64(uint32(value >= 0 ? uint32(value) : uint32(-value)));
-            uint64 result = (2 * uint64(MODULUS)) - absValue;
-            return reduce(result);
+    function fromI32(int32 value) internal pure returns (uint32 result) {
+        assembly ("memory-safe") {
+            let isNegative := slt(value, 0)
+            let absValue := sub(xor(value, sub(0, isNegative)), isNegative)
+            let doubleModulus := mul(0x7fffffff, 2)
+            let adjustedValue := sub(doubleModulus, mul(isNegative, absValue))
+            let finalValue := add(mul(iszero(isNegative), absValue), mul(isNegative, adjustedValue))
+            
+            let step1 := add(add(shr(31, finalValue), finalValue), 1)
+            let step2 := add(shr(31, step1), finalValue)
+            result := and(step2, 0x7fffffff)
         }
-        return reduce(uint64(uint32(value)));
     }
     
     /// @notice Batch inversion using Montgomery's trick
@@ -87,26 +115,77 @@ library M31Field {
         uint256 n = elements.length;
         if (n == 0) return new uint32[](0);
         
-        inverses = new uint32[](n);
-        uint32[] memory products = new uint32[](n);
-        if (elements[0] == 0) {
-            revert("M31Field: division by zero");
-        }
-        products[0] = elements[0];
-        
-        for (uint256 i = 1; i < n; i++) {
-            if (elements[i] == 0) {
-                revert("M31Field: division by zero");
+        assembly ("memory-safe") {
+            let elementsPtr := add(elements, 0x20)
+            
+            inverses := mload(0x40)
+            mstore(inverses, n)
+            let inversesPtr := add(inverses, 0x20)
+            mstore(0x40, add(inversesPtr, mul(n, 0x20)))
+            
+            let products := mload(0x40)
+            mstore(products, n)
+            let productsPtr := add(products, 0x20)
+            mstore(0x40, add(productsPtr, mul(n, 0x20)))
+            
+            let firstElement := mload(elementsPtr)
+            if iszero(firstElement) {
+                revert(0, 0)
             }
-            products[i] = mul(products[i-1], elements[i]);
+            mstore(productsPtr, firstElement)
+            
+            for { let i := 1 } lt(i, n) { i := add(i, 1) } {
+                let element := mload(add(elementsPtr, mul(i, 0x20)))
+                if iszero(element) {
+                    revert(0, 0)
+                }
+                let prevProduct := mload(add(productsPtr, mul(sub(i, 1), 0x20)))
+                
+                let product := mul(prevProduct, element)
+                let step1 := add(add(shr(31, product), product), 1)
+                let step2 := add(shr(31, step1), product)
+                let result := and(step2, 0x7fffffff)
+                
+                mstore(add(productsPtr, mul(i, 0x20)), result)
+            }
         }
         
-        uint32 allInverse = inverse(products[n-1]);
-        for (uint256 i = n - 1; i > 0; i--) {
-            inverses[i] = mul(allInverse, products[i-1]);
-            allInverse = mul(allInverse, elements[i]);
+        uint32 lastProduct;
+        uint256 elementsPtr;
+        uint256 inversesPtr;
+        uint256 productsPtr;
+        
+        assembly ("memory-safe") {
+            elementsPtr := add(elements, 0x20)
+            inversesPtr := add(inverses, 0x20)
+            
+            let products := mload(0x40)
+            mstore(products, n)
+            productsPtr := add(products, 0x20)
+            mstore(0x40, add(productsPtr, mul(n, 0x20)))
+            
+            lastProduct := mload(add(productsPtr, mul(sub(n, 1), 0x20)))
         }
-        inverses[0] = allInverse;
+        uint32 allInverse = inverse(lastProduct);
+        
+        assembly ("memory-safe") {
+            for { let i := sub(n, 1) } gt(i, 0) { i := sub(i, 1) } {
+                let prevProduct := mload(add(productsPtr, mul(sub(i, 1), 0x20)))
+                let element := mload(add(elementsPtr, mul(i, 0x20)))
+                
+                let product1 := mul(allInverse, prevProduct)
+                let step1_1 := add(add(shr(31, product1), product1), 1)
+                let step2_1 := add(shr(31, step1_1), product1)
+                let invResult := and(step2_1, 0x7fffffff)
+                mstore(add(inversesPtr, mul(i, 0x20)), invResult)
+                
+                let product2 := mul(allInverse, element)
+                let step1_2 := add(add(shr(31, product2), product2), 1)
+                let step2_2 := add(shr(31, step1_2), product2)
+                allInverse := and(step2_2, 0x7fffffff)
+            }
+            mstore(inversesPtr, allInverse)
+        }
         
         return inverses;
     }
@@ -158,22 +237,40 @@ library M31Field {
     }
     
     /// @notice Power function for small exponents
-    function pow(uint32 base, uint32 exponent) internal pure returns (uint32) {
-        if (exponent == 0) return 1;
-        if (exponent == 1) return base;
-        if (base == 0) return 0;
-        
-        uint32 result = 1;
-        uint32 currentBase = base;
-        
-        while (exponent > 0) {
-            if (exponent & 1 == 1) {
-                result = mul(result, currentBase);
+    function pow(uint32 base, uint32 exponent) internal pure returns (uint32 result) {
+        assembly ("memory-safe") {
+            switch exponent
+            case 0 {
+                result := 1
             }
-            currentBase = square(currentBase);
-            exponent >>= 1;
+            case 1 {
+                result := base
+            }
+            default {
+                if iszero(base) {
+                    result := 0
+                }
+                if base {
+                    result := 1
+                    let currentBase := base
+                    
+                    for {} gt(exponent, 0) {} {
+                        if and(exponent, 1) {
+                            let product := mul(result, currentBase)
+                            let step1 := add(add(shr(31, product), product), 1)
+                            let step2 := add(shr(31, step1), product)
+                            result := and(step2, 0x7fffffff)
+                        }
+                        
+                        let squareProduct := mul(currentBase, currentBase)
+                        let step1_sq := add(add(shr(31, squareProduct), squareProduct), 1)
+                        let step2_sq := add(shr(31, step1_sq), squareProduct)
+                        currentBase := and(step2_sq, 0x7fffffff)
+                        
+                        exponent := shr(1, exponent)
+                    }
+                }
+            }
         }
-        
-        return result;
     }
 }

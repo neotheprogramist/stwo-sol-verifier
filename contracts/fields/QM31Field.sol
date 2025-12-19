@@ -82,19 +82,37 @@ library QM31Field {
     }
 
     /// @notice Addition in QM31 field
-    function add(QM31 memory a, QM31 memory b) internal pure returns (QM31 memory) {
-        return QM31(
-            CM31Field.add(a.first, b.first),
-            CM31Field.add(a.second, b.second)
-        );
+    function add(QM31 memory a, QM31 memory b) internal pure returns (QM31 memory result) {
+        assembly ("memory-safe") {
+            let aFirstPtr := mload(a)
+            let aSecondPtr := mload(add(a, 0x20))
+            let bFirstPtr := mload(b)
+            let bSecondPtr := mload(add(b, 0x20))
+            
+            result := mload(0x40)
+            let resultFirstPtr := result
+            let resultSecondPtr := add(result, 0x40)
+            mstore(0x40, add(result, 0x80))
+            
+            mstore(result, resultFirstPtr)
+            mstore(add(result, 0x20), resultSecondPtr)
+        }
+        
+        result.first = CM31Field.add(a.first, b.first);
+        result.second = CM31Field.add(a.second, b.second);
     }
 
     /// @notice Subtraction in QM31 field
-    function sub(QM31 memory a, QM31 memory b) internal pure returns (QM31 memory) {
-        return QM31(
-            CM31Field.sub(a.first, b.first),
-            CM31Field.sub(a.second, b.second)
-        );
+    function sub(QM31 memory a, QM31 memory b) internal pure returns (QM31 memory result) {
+        assembly ("memory-safe") {
+            result := mload(0x40)
+            mstore(0x40, add(result, 0x80))
+            mstore(result, add(result, 0x40))
+            mstore(add(result, 0x20), add(result, 0x60))
+        }
+        
+        result.first = CM31Field.sub(a.first, b.first);
+        result.second = CM31Field.sub(a.second, b.second);
     }
 
     /// @notice Negation in QM31 field
@@ -106,16 +124,22 @@ library QM31Field {
     }
 
     /// @notice Multiplication in QM31 field: (a + bu) * (c + du) = (ac + R*bd) + (ad + bc)u where R = 2+i
-    function mul(QM31 memory a, QM31 memory b) internal pure returns (QM31 memory) {
+    function mul(QM31 memory a, QM31 memory b) internal pure returns (QM31 memory result) {
+        assembly ("memory-safe") {
+            result := mload(0x40)
+            mstore(0x40, add(result, 0x80))
+            mstore(result, add(result, 0x40))
+            mstore(add(result, 0x20), add(result, 0x60))
+        }
+        
         CM31Field.CM31 memory ac = CM31Field.mul(a.first, b.first);
         CM31Field.CM31 memory bd = CM31Field.mul(a.second, b.second);
         CM31Field.CM31 memory Rbd = CM31Field.mul(R(), bd);
-        CM31Field.CM31 memory firstComponent = CM31Field.add(ac, Rbd);
+        result.first = CM31Field.add(ac, Rbd);
+        
         CM31Field.CM31 memory ad = CM31Field.mul(a.first, b.second);
         CM31Field.CM31 memory bc = CM31Field.mul(a.second, b.first);
-        CM31Field.CM31 memory secondComponent = CM31Field.add(ad, bc);
-        
-        return QM31(firstComponent, secondComponent);
+        result.second = CM31Field.add(ad, bc);
     }
 
     /// @notice Square operation in QM31 field
@@ -124,9 +148,16 @@ library QM31Field {
     }
 
     /// @notice Multiplicative inverse: (a + bu)⁻¹ = (a - bu) / (a² - R*b²) where R = 2+i
-    function inverse(QM31 memory a) internal pure returns (QM31 memory) {
+    function inverse(QM31 memory a) internal pure returns (QM31 memory result) {
         if (isZero(a)) {
             revert("QM31Field: division by zero");
+        }
+        
+        assembly ("memory-safe") {
+            result := mload(0x40)
+            mstore(0x40, add(result, 0x80))
+            mstore(result, add(result, 0x40))
+            mstore(add(result, 0x20), add(result, 0x60))
         }
         
         CM31Field.CM31 memory b2 = CM31Field.square(a.second);
@@ -135,10 +166,8 @@ library QM31Field {
         CM31Field.CM31 memory denom = CM31Field.sub(a2, Rb2);
         CM31Field.CM31 memory denomInv = CM31Field.inverse(denom);
         
-        return QM31(
-            CM31Field.mul(a.first, denomInv),
-            CM31Field.mul(CM31Field.neg(a.second), denomInv)
-        );
+        result.first = CM31Field.mul(a.first, denomInv);
+        result.second = CM31Field.mul(CM31Field.neg(a.second), denomInv);
     }
 
     /// @notice Division in QM31 field
@@ -162,11 +191,16 @@ library QM31Field {
     }
 
     /// @notice Multiplication by CM31 scalar
-    function mulCM31(QM31 memory a, CM31Field.CM31 memory scalar) internal pure returns (QM31 memory) {
-        return QM31(
-            CM31Field.mul(a.first, scalar),
-            CM31Field.mul(a.second, scalar)
-        );
+    function mulCM31(QM31 memory a, CM31Field.CM31 memory scalar) internal pure returns (QM31 memory result) {
+        assembly ("memory-safe") {
+            result := mload(0x40)
+            mstore(0x40, add(result, 0x80))
+            mstore(result, add(result, 0x40))
+            mstore(add(result, 0x20), add(result, 0x60))
+        }
+        
+        result.first = CM31Field.mul(a.first, scalar);
+        result.second = CM31Field.mul(a.second, scalar);
     }
 
     /// @notice Try to convert QM31 to M31 (real number)
