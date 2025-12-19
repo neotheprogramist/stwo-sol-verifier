@@ -39,5 +39,8 @@ Cargo.lock
 cache/
 out/
 
+# Foundry
+broadcast/
+
 # Soldeer
 /dependencies
