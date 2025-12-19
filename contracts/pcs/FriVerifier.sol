@@ -8,6 +8,7 @@ import "../cosets/CanonicCosetM31.sol";
 import "../cosets/CosetM31.sol";
 import "../circle/CirclePoint.sol";
 import "../circle/CirclePointM31.sol";
+import {console} from "forge-std/console.sol";
 import "../fields/QM31Field.sol";
 import "../fields/CM31Field.sol";
 import "../fields/M31Field.sol";
@@ -167,6 +168,11 @@ library FriVerifier {
         FriProof memory proof,
         CirclePolyDegreeBound.Bound[] memory columnBounds
     ) internal returns (FriVerifierState memory friVerifierState) {
+        uint256 gasStart = gasleft();
+        console.log("[FRI GAS] Starting FriVerifier.commit");
+        console.log("[FRI INFO] Inner layers count:", proof.innerLayers.length);
+        console.log("[FRI INFO] Column bounds count:", columnBounds.length);
+        
         emit FriCommitmentStarted(proof.innerLayers.length + 1);
 
         // Validate inputs
@@ -174,6 +180,7 @@ library FriVerifier {
             revert EmptyColumnBounds();
         }
 
+        uint256 gasBeforeValidation = gasleft();
         // Verify column bounds are sorted in descending order
         for (uint256 i = 1; i < columnBounds.length; i++) {
             if (
@@ -183,12 +190,16 @@ library FriVerifier {
                 revert ColumnBoundsNotSorted();
             }
         }
+        console.log("[FRI GAS] Bounds validation:", gasBeforeValidation - gasleft());
 
         // Mix first layer commitment into channel
+        uint256 gasBeforeMix = gasleft();
         channelState.mixRoot(channelState.digest, proof.firstLayer.commitment);
+        console.log("[FRI GAS] mixRoot first layer:", gasBeforeMix - gasleft());
         emit FriLayerCommitted(0, proof.firstLayer.commitment);
 
         // Calculate column commitment domains
+        uint256 gasBeforeDomains = gasleft();
         CircleDomain.CircleDomainStruct[]
             memory columnCommitmentDomains = new CircleDomain.CircleDomainStruct[](
                 columnBounds.length
@@ -208,15 +219,21 @@ library FriVerifier {
                 halfCoset
             );
         }
+        console.log("[FRI GAS] Calculate domains:", gasBeforeDomains - gasleft());
 
         // Create first layer verifier
+        uint256 gasBeforeDraw = gasleft();
+        QM31Field.QM31 memory foldingAlpha = channelState.drawSecureFelt();
+        console.log("[FRI GAS] drawSecureFelt first layer:", gasBeforeDraw - gasleft());
+        
+        uint256 gasBeforeFirstLayer = gasleft();
         FriFirstLayerVerifier memory firstLayer = FriFirstLayerVerifier({
             columnBounds: columnBounds,
             columnCommitmentDomains: columnCommitmentDomains,
-            foldingAlpha: channelState.drawSecureFelt(),
+            foldingAlpha: foldingAlpha,
             proof: proof.firstLayer
         });
-
+        console.log("[FRI GAS] Create first layer verifier:", gasBeforeFirstLayer - gasleft());
         // Process inner layers
         FriInnerLayerVerifier[]
             memory innerLayers = new FriInnerLayerVerifier[](
@@ -229,24 +246,32 @@ library FriVerifier {
         uint32 layerDomainLogSize = layerBound + config.logBlowupFactor;
         
   
-        
+        uint256 gasBeforeHalfOdds = gasleft();
         CosetM31.CosetStruct memory layerDomain = CosetM31.halfOdds(layerDomainLogSize);
-        
- 
+        console.log("[FRI GAS] halfOdds first layer:", gasBeforeHalfOdds - gasleft());
+        uint256 gasBeforeInnerLayers = gasleft();
+        uint256 totalMixGas = 0;
+        uint256 totalDrawGas = 0;
 
         for (uint256 i = 0; i < proof.innerLayers.length; i++) {
             // Mix layer commitment into channel
+            uint256 gasBeforeLayerMix = gasleft();
             channelState.mixRoot(
                 channelState.digest,
                 proof.innerLayers[i].commitment
             );
+            totalMixGas += (gasBeforeLayerMix - gasleft());
             emit FriLayerCommitted(i + 1, proof.innerLayers[i].commitment);
 
             // Create inner layer verifier
+            uint256 gasBeforeLayerDraw = gasleft();
+            QM31Field.QM31 memory layerFoldingAlpha = channelState.drawSecureFelt();
+            totalDrawGas += (gasBeforeLayerDraw - gasleft());
+            
             innerLayers[i] = FriInnerLayerVerifier({
                 degreeBound: layerBound,
                 domain: layerDomain,
-                foldingAlpha: channelState.drawSecureFelt(),
+                foldingAlpha: layerFoldingAlpha,
                 layerIndex: i,
                 proof: proof.innerLayers[i]
             });
@@ -261,6 +286,9 @@ library FriVerifier {
             layerDomain = CosetM31.double(layerDomain);
   
         }
+        console.log("[FRI GAS] Inner layers total:", gasBeforeInnerLayers - gasleft());
+        console.log("[FRI GAS] Inner layers mix sum:", totalMixGas);
+        console.log("[FRI GAS] Inner layers draw secure felt sum:", totalDrawGas);
 
         // Verify final layer bound matches config
         if (layerBound != config.logLastLayerDegreeBound) {
@@ -273,9 +301,12 @@ library FriVerifier {
             revert LastLayerDegreeInvalid();
         }
         
+        uint256 gasBeforeMixFelts = gasleft();
         channelState.mixFelts(proof.lastLayerPoly);
+        console.log("[FRI GAS] mixFelts lastLayerPoly:", gasBeforeMixFelts - gasleft());
 
         // Initialize verifier state
+        uint256 gasBeforeState = gasleft();
         friVerifierState = FriVerifierState({
             config: config,
             firstLayer: firstLayer,
@@ -290,8 +321,10 @@ library FriVerifier {
             }),
             queriesSampled: false
         });
+        console.log("[FRI GAS] Create state:", gasBeforeState - gasleft());
 
         emit FriCommitmentCompleted(true);
+        console.log("[FRI GAS] Total FriVerifier.commit:", gasStart - gasleft());
     }
 
     /// @notice Sample query positions for FRI decommitment
@@ -700,19 +733,28 @@ library FriVerifier {
         QueryPositionsByLogSize memory queryPositionsByLogSize, // &BTreeMap<u32, Vec<usize>>
         uint32[][] memory queriedValues, // TreeVec<Vec<BaseField>> (BaseField = M31 = uint32)
         uint32[][][] memory nColumnsPerLogSize // TreeVec<&BTreeMap<u32, usize>>
-    ) internal pure returns (QM31Field.QM31[][] memory result) {
+    ) internal view returns (QM31Field.QM31[][] memory result) {
+        uint256 gasStart = gasleft();
+        console.log("[FRI GAS] Starting friAnswers");
 
         // Flatten column log sizes and create (logSize, samples) pairs
+        uint256 gasBeforeFlatten = gasleft();
         LogSizeAndSamples[] memory flattenedData = _flattenAndCreatePairs(
             columnLogSizes,
             samples
         );
+        console.log("[FRI GAS] _flattenAndCreatePairs:", gasBeforeFlatten - gasleft());
 
         // Sort by log size in DESCENDING order (matches Rust: sorted_by_key(|(log_size, ..)| Reverse(*log_size)))
+        uint256 gasBeforeSort = gasleft();
         _sortByLogSizeAscending(flattenedData);
+        console.log("[FRI GAS] _sortByLogSizeAscending:", gasBeforeSort - gasleft());
         
         // Get unique log sizes from flattened data in descending order
+        uint256 gasBeforeUnique = gasleft();
         uint32[] memory uniqueLogSizes = _getUniqueLogSizesFromFlattened(flattenedData);
+        console.log("[FRI GAS] _getUniqueLogSizesFromFlattened:", gasBeforeUnique - gasleft());
+        console.log("[FRI INFO] Unique log sizes count:", uniqueLogSizes.length);
 
         
         result = new QM31Field.QM31[][](uniqueLogSizes.length);
@@ -724,8 +766,11 @@ library FriVerifier {
         });
 
         // Process each unique log size (already in descending order from sorting)
+        uint256 totalAnswersForLogSizeGas = 0;
         for (uint256 i = 0; i < uniqueLogSizes.length; i++) {
+            uint256 gasBeforeLogSize = gasleft();
             uint32 logSize = uniqueLogSizes[i];
+            console.log("[FRI GAS] Processing logSize:", logSize);
             
             // Find this logSize in queryPositionsByLogSize
             uint256[] memory queryPositions;
@@ -751,6 +796,7 @@ library FriVerifier {
             // Calculate answers for this log size
             // In Rust: fri_answers_for_log_size returns Result<Vec<SecureField>, VerificationError>
             // This becomes one column in our 2D array
+            uint256 gasBeforeAnswersForLogSize = gasleft();
             QM31Field.QM31[] memory answersForLogSize = friAnswersForLogSize(
                 logSize,
                 samplesForLogSize,
@@ -759,14 +805,18 @@ library FriVerifier {
                 queriedValuesIter,
                 nColumnsForLogSize
             );
+            uint256 answersForLogSizeGas = gasBeforeAnswersForLogSize - gasleft();
+            totalAnswersForLogSizeGas += answersForLogSizeGas;
+            console.log("[FRI GAS] friAnswersForLogSize for logSize", logSize, ":", answersForLogSizeGas);
 
             // Store this group's answers as one column
             result[i] = answersForLogSize;
-      
+            console.log("[FRI GAS] Total for logSize", logSize, ":", gasBeforeLogSize - gasleft());
 
         }
 
-
+        console.log("[FRI GAS] Total friAnswersForLogSize sum:", totalAnswersForLogSizeGas);
+        console.log("[FRI GAS] Total friAnswers:", gasStart - gasleft());
     }
 
     /// @notice Calculate FRI answers for a specific log size
@@ -1391,7 +1441,7 @@ library FriVerifier {
     function decommit(
         FriVerifierState memory friVerifierState,
         QM31Field.QM31[][] memory firstLayerQueryEvals
-    ) internal pure returns (bool success) {
+    ) internal view returns (bool success) {
         // Ensure queries were sampled
         if (!friVerifierState.queriesSampled) {
             revert("Queries not sampled");
@@ -1415,13 +1465,18 @@ library FriVerifier {
         FriVerifierState memory friVerifierState,
         Queries memory queries,
         QM31Field.QM31[][] memory firstLayerQueryEvals
-    ) internal pure returns (bool success) {
+    ) internal view returns (bool success) {
+        uint256 gasStart = gasleft();
+        console.log("[FRI GAS] Starting decommitOnQueries");
+        console.log("[FRI INFO] Queries count:", queries.positions.length);
 
         // Step 1: Verify first layer and get sparse evaluations
+        uint256 gasBeforeFirstLayer = gasleft();
         (
             bool firstLayerSuccess,
             SparseEvaluation[] memory firstLayerSparseEvals
         ) = decommitFirstLayer(friVerifierState, queries, firstLayerQueryEvals);
+        console.log("[FRI GAS] STEP 1 - decommitFirstLayer:", gasBeforeFirstLayer - gasleft());
         if (!firstLayerSuccess) {
             revert(
                 "FRI decommit failed at STEP 1: First layer verification failed"
@@ -1429,12 +1484,15 @@ library FriVerifier {
         }
 
         // Step 2: Fold queries for inner layers (equivalent to queries.fold(CIRCLE_TO_LINE_FOLD_STEP))
+        uint256 gasBeforeFold = gasleft();
         Queries memory innerLayerQueries = foldQueries(
             queries,
             CIRCLE_TO_LINE_FOLD_STEP
         );
+        console.log("[FRI GAS] STEP 2 - foldQueries:", gasBeforeFold - gasleft());
 
         // Step 3: Verify inner layers
+        uint256 gasBeforeInnerLayers = gasleft();
         (
             bool innerLayersSuccess,
             Queries memory lastLayerQueries,
@@ -1444,6 +1502,7 @@ library FriVerifier {
                 innerLayerQueries,
                 firstLayerSparseEvals
             );
+        console.log("[FRI GAS] STEP 3 - decommitInnerLayers:", gasBeforeInnerLayers - gasleft());
         if (!innerLayersSuccess) {
             revert("FRI decommit failed at STEP 3: Inner layers verification failed");
         }
@@ -1451,11 +1510,14 @@ library FriVerifier {
         
 
         // Step 4: Verify last layer
+        uint256 gasBeforeLastLayer = gasleft();
         bool lastLayerSuccess = decommitLastLayer(friVerifierState, lastLayerQueries, lastLayerQueryEvals);
+        console.log("[FRI GAS] STEP 4 - decommitLastLayer:", gasBeforeLastLayer - gasleft());
         if (!lastLayerSuccess) {
             revert("FRI decommit failed at STEP 4: Last layer verification failed");
         }
 
+        console.log("[FRI GAS] Total decommitOnQueries:", gasStart - gasleft());
         return true;
     }
 
@@ -1472,7 +1534,7 @@ library FriVerifier {
         QM31Field.QM31[][] memory firstLayerQueryEvals
     )
         internal
-        pure
+        view
         returns (bool success, SparseEvaluation[] memory sparseEvalsResult)
     {
         // Verify first layer using the first layer verifier
@@ -1496,7 +1558,7 @@ library FriVerifier {
         QM31Field.QM31[][] memory firstLayerQueryEvals
     )
         internal
-        pure
+        view
         returns (bool success, SparseEvaluation[] memory sparseEvalsResult)
     {
         _validateFirstLayerInputs(firstLayer, queries, firstLayerQueryEvals);
@@ -1509,7 +1571,7 @@ library FriVerifier {
         QM31Field.QM31[][] memory firstLayerQueryEvals
     )
         private
-        pure
+        view
         returns (bool success, SparseEvaluation[] memory sparseEvalsResult)
     {
         WitnessIterator memory witnessIter = WitnessIterator({
@@ -1592,7 +1654,7 @@ library FriVerifier {
         uint256 numUniqueLogSizes,
         uint32[] memory uniqueLogSizes,
         uint256[][] memory decommitmentsByLogSize
-    ) private pure {
+    ) private view {
         uint32[] memory decommittedValues = _extractDecommittedValues(sparseEvals, totalDecommittedM31Values);
         _verifyMerkleProofFinal(firstLayer, decommittedValues, numUniqueLogSizes, uniqueLogSizes, decommitmentsByLogSize);
     }
@@ -1603,15 +1665,16 @@ library FriVerifier {
         uint256 numUniqueLogSizes,
         uint32[] memory uniqueLogSizes,
         uint256[][] memory decommitmentsByLogSize
-    ) private pure {
+    ) private view {
         uint32[] memory columnLogSizes = _createColumnLogSizes(firstLayer);
         
         MerkleVerifier.MerkleTree memory verifier = MerkleVerifier.createMerkleTree(
             firstLayer.proof.commitment, columnLogSizes
         );
 
+        uint256 gasBeforeDecode = gasleft();
         MerkleVerifier.Decommitment memory decommitment = _decodeDecommitment(firstLayer.proof.decommitment);
-        
+        console.log("Gas used in _decodeDecommitment:", gasBeforeDecode - gasleft());
         // Prepare queries per log size from decommitment positions
         MerkleVerifier.QueriesPerLogSize[] memory queriesPerLogSize = new MerkleVerifier.QueriesPerLogSize[](numUniqueLogSizes);
         for (uint256 i = 0; i < numUniqueLogSizes; i++) {
@@ -1623,8 +1686,9 @@ library FriVerifier {
         
         // Sort queriesPerLogSize by logSize in ascending order to match Rust behavior
         _sortQueriesPerLogSizeAscending(queriesPerLogSize);
-        
+        uint256 gasBeforeVerify = gasleft();
         MerkleVerifier.verify(verifier, queriesPerLogSize, decommittedValues, decommitment);
+        console.log("Gas used in MerkleVerifierProof.verify:", gasBeforeVerify - gasleft());
     }
 
     /// @notice Flatten sparse evaluation to 1D array
@@ -1667,13 +1731,17 @@ library FriVerifier {
         SparseEvaluation[] memory firstLayerSparseEvals
     )
         internal
-        pure
+        view
         returns (
             bool success,
             Queries memory lastLayerQueries,
             QM31Field.QM31[] memory lastLayerQueryEvals
         )
     {
+        uint256 gasStart = gasleft();
+        console.log("[FRI GAS] Starting decommitInnerLayers");
+        console.log("[FRI INFO] Inner layers:", friVerifierState.innerLayers.length);
+        
         Queries memory layerQueries = queries;
         QM31Field.QM31[] memory layerQueryEvals = new QM31Field.QM31[](
             layerQueries.positions.length
@@ -1696,6 +1764,9 @@ library FriVerifier {
             layerIndex < friVerifierState.innerLayers.length;
             layerIndex++
         ) {
+            uint256 gasBeforeLayer = gasleft();
+            console.log("[FRI GAS] Layer", layerIndex);
+            
             FriInnerLayerVerifier memory layer = friVerifierState.innerLayers[
                 layerIndex
             ];
@@ -1722,7 +1793,6 @@ library FriVerifier {
                     memory columnDomain = friVerifierState
                         .firstLayer
                         .columnCommitmentDomains[columnBoundIndex];
-
 
                 QM31Field.QM31[]
                     memory foldedColumnEvals = foldCircleSparseEvals(
@@ -1756,6 +1826,8 @@ library FriVerifier {
             layerQueries = newLayerQueries;
             layerQueryEvals = newLayerQueryEvals;
             previousFoldingAlpha = layer.foldingAlpha;
+            
+            console.log("[FRI GAS] Layer", layerIndex, "done:", gasBeforeLayer - gasleft());
         }
 
         // Ensure all values have been consumed
@@ -1769,6 +1841,7 @@ library FriVerifier {
             "Not all sparse evals consumed"
         );
 
+        console.log("[FRI GAS] Total decommitInnerLayers:", gasStart - gasleft());
         return (true, layerQueries, layerQueryEvals);
     }
 
@@ -2168,13 +2241,14 @@ library FriVerifier {
         QM31Field.QM31[] memory layerQueryEvals
     )
         internal
-        pure
+        view
         returns (
             bool success,
             Queries memory newQueries,
             QM31Field.QM31[] memory newQueryEvals
         )
     {
+        uint256 gasStart = gasleft();
 
         // Rust: assert_eq!(queries.log_domain_size, self.domain.log_size());
         require(
@@ -2183,12 +2257,15 @@ library FriVerifier {
         );
 
         // Initialize witness iterator
+        uint256 gasBeforeWitness = gasleft();
         WitnessIterator memory witnessIter = WitnessIterator({
             witness: layer.proof.friWitness,
             index: 0
         });
+        console.log("[FRI GAS]   verifyAndFold - init witness:", gasBeforeWitness - gasleft());
 
         // Rust: compute_decommitment_positions_and_rebuild_evals(&queries, &evals_at_queries, &mut fri_witness, FOLD_STEP)
+        uint256 gasBeforeCompute = gasleft();
         (
             uint256[] memory decommitmentPositions,
             SparseEvaluation memory sparseEvaluation
@@ -2198,6 +2275,7 @@ library FriVerifier {
                 witnessIter,
                 FOLD_STEP
             );
+        console.log("[FRI GAS]   verifyAndFold - computeDecommitment:", gasBeforeCompute - gasleft());
 
 
         // Rust: Check all proof evals have been consumed
@@ -2206,7 +2284,7 @@ library FriVerifier {
         }
 
         // Rust: Extract decommitted M31 values
-        // sparse_evaluation.subset_evals.iter().flatten().flat_map(|qm31| qm31.to_m31_array()).collect_vec()
+        uint256 gasBeforeExtract = gasleft();
         uint256 totalM31Values = 0;
         for (uint256 i = 0; i < sparseEvaluation.subsetEvals.length; i++) {
             totalM31Values += sparseEvaluation.subsetEvals[i].length * 4; // 4 M31 per QM31
@@ -2223,9 +2301,10 @@ library FriVerifier {
                 decommittedValues[valueIdx++] = qm31.second.imag;
             }
         }
+        console.log("[FRI GAS]   verifyAndFold - extract M31 values:", gasBeforeExtract - gasleft());
 
         // Rust: Create MerkleVerifier with column log sizes (4 columns of same log size)
-        // vec![self.domain.log_size(); SECURE_EXTENSION_DEGREE]
+        uint256 gasBeforeTree = gasleft();
         uint32[] memory columnLogSizes = new uint32[](SECURE_EXTENSION_DEGREE);
         for (uint256 i = 0; i < SECURE_EXTENSION_DEGREE; i++) {
             columnLogSizes[i] = layer.domain.logSize;
@@ -2240,9 +2319,9 @@ library FriVerifier {
         MerkleVerifier.Decommitment memory decommitment = _decodeDecommitment(
             layer.proof.decommitment
         );
+        console.log("[FRI GAS]   verifyAndFold - create tree & decode:", gasBeforeTree - gasleft());
 
         // Rust: Verify Merkle proof with single log size
-        // BTreeMap::from_iter([(self.domain.log_size(), decommitment_positions)])
         MerkleVerifier.QueriesPerLogSize[]
             memory queriesPerLogSize = new MerkleVerifier.QueriesPerLogSize[](1);
         queriesPerLogSize[0] = MerkleVerifier.QueriesPerLogSize({
@@ -2250,6 +2329,7 @@ library FriVerifier {
             queries: decommitmentPositions
         });
 
+        uint256 gasBeforeVerify = gasleft();
         // Verify - MerkleVerifier.verify will revert on failure
         MerkleVerifier.verify(
             verifier,
@@ -2257,21 +2337,25 @@ library FriVerifier {
             decommittedValues,
             decommitment
         );
+        console.log("[FRI GAS]   verifyAndFold - MerkleVerifier.verify:", gasBeforeVerify - gasleft());
 
         // If we get here, verification succeeded
 
         // Rust: Fold queries for next layer
-        // let folded_queries = queries.fold(FOLD_STEP);
+        uint256 gasBeforeFoldQueries = gasleft();
         newQueries = foldQueries(layerQueries, FOLD_STEP);
+        console.log("[FRI GAS]   verifyAndFold - foldQueries:", gasBeforeFoldQueries - gasleft());
 
         // Rust: Fold sparse evaluations using fold_line
-        // let folded_evals = sparse_evaluation.fold_line(self.folding_alpha, self.domain);
+        uint256 gasBeforeFoldLine = gasleft();
         newQueryEvals = foldLineSparseEvals(
             sparseEvaluation,
             layer.foldingAlpha,
             layer.domain
         );
-
+        console.log("[FRI GAS]   verifyAndFold - foldLineSparseEvals:", gasBeforeFoldLine - gasleft());
+        
+        console.log("[FRI GAS]   verifyAndFold - TOTAL:", gasStart - gasleft());
         return (true, newQueries, newQueryEvals);
     }
 

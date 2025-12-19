@@ -14,6 +14,7 @@ import "../fields/QM31Field.sol";
 import "../vcs/MerkleVerifier.sol";
 import "./ProofParser.sol";
 import "../secure_poly/SecureCirclePoly.sol";
+import {console} from "forge-std/console.sol";
 
 /// @title STWOVerifier
 /// @notice Generic STARK verifier
@@ -65,6 +66,7 @@ contract STWOVerifier {
         bytes32 digest,
         uint32 nDraws
     ) external returns (bool) {
+        console.log("Starting STWO proof verification...");
         return _verifyProof(proof, params, treeRoots, treeColumnLogSizes, digest, nDraws);
     }
 
@@ -76,14 +78,27 @@ contract STWOVerifier {
         bytes32 digest,
         uint32 nDraws
     ) private returns (bool) {
+        uint256 gasStart = gasleft();
+        console.log("[GAS PROFILING] Starting _verifyProof");
+        
         if (_components.isInitialized) {
             _components.reset();
         }
         
+        uint256 gasBeforePoly = gasleft();
         SecureCirclePoly.SecurePoly memory poly = _createSecurePoly(proof.compositionPoly);
-        _initializeVerification(proof, treeRoots, treeColumnLogSizes, digest, nDraws);
+        console.log("[GAS] _createSecurePoly:", gasBeforePoly - gasleft());
         
-        return _performVerificationSteps(proof, params, poly);
+        uint256 gasBeforeInit = gasleft();
+        _initializeVerification(proof, treeRoots, treeColumnLogSizes, digest, nDraws);
+        console.log("[GAS] _initializeVerification:", gasBeforeInit - gasleft());
+        
+        uint256 gasBeforeSteps = gasleft();
+        bool result = _performVerificationSteps(proof, params, poly);
+        console.log("[GAS] _performVerificationSteps:", gasBeforeSteps - gasleft());
+        console.log("[GAS PROFILING] Total _verifyProof:", gasStart - gasleft());
+        
+        return result;
     }
 
     function _initializeVerification(
@@ -109,17 +124,35 @@ contract STWOVerifier {
         VerificationParams calldata params,
         SecureCirclePoly.SecurePoly memory poly
     ) private returns (bool) {
-        if (!_performCompositionCommit(proof, params)) return false;
+        uint256 gasStart = gasleft();
+        console.log("[GAS PROFILING] Starting verification steps");
         
+        uint256 gasBeforeCommit = gasleft();
+        if (!_performCompositionCommit(proof, params)) return false;
+        console.log("[GAS] _performCompositionCommit:", gasBeforeCommit - gasleft());
+        
+        uint256 gasBeforeOodsPoint = gasleft();
         CirclePoint.Point memory oodsPoint = CirclePoint.getRandomPointFromState(_channel);
+        console.log("[GAS] getRandomPointFromState:", gasBeforeOodsPoint - gasleft());
+        
+        uint256 gasBeforeSamples = gasleft();
         ComponentsLib.TreeVecMaskPoints memory samplePoints = _computeSamplePoints(
             oodsPoint,
             proof.commitments.length - 1,
             params
         );
+        console.log("[GAS] _computeSamplePoints:", gasBeforeSamples - gasleft());
         
+        uint256 gasBeforeOods = gasleft();
         if (!_performOodsVerification(proof, poly, oodsPoint)) return false;
-        return _performFriVerification(proof, samplePoints);
+        console.log("[GAS] _performOodsVerification:", gasBeforeOods - gasleft());
+        
+        uint256 gasBeforeFri = gasleft();
+        bool result = _performFriVerification(proof, samplePoints);
+        console.log("[GAS] _performFriVerification:", gasBeforeFri - gasleft());
+        console.log("[GAS PROFILING] Total verification steps:", gasStart - gasleft());
+        
+        return result;
     }
 
     function _performCompositionCommit(
@@ -154,27 +187,50 @@ contract STWOVerifier {
         ProofParser.Proof calldata proof,
         ComponentsLib.TreeVecMaskPoints memory samplePoints
     ) private returns (bool) {
+        uint256 gasStart = gasleft();
+        console.log("[GAS PROFILING] Starting FRI verification");
+        
+        uint256 gasBeforeFlatten = gasleft();
         QM31Field.QM31[] memory flattenedSampledValues = ProofParser.flattenCols(proof.sampledValues);
+        console.log("[GAS] flattenCols:", gasBeforeFlatten - gasleft());
+        
+        uint256 gasBeforeMix = gasleft();
         _channel.mixFelts(flattenedSampledValues);
+        console.log("[GAS] mixFelts:", gasBeforeMix - gasleft());
 
+        uint256 gasBeforeDraw = gasleft();
         QM31Field.QM31 memory randomCoeff2 = _channel.drawSecureFelt();
+        console.log("[GAS] drawSecureFelt:", gasBeforeDraw - gasleft());
 
+        uint256 gasBeforeBounds = gasleft();
         CirclePolyDegreeBound.Bound[] memory bounds = _commitmentScheme.calculateBounds();
+        console.log("[GAS] calculateBounds:", gasBeforeBounds - gasleft());
 
+        uint256 gasBeforeCommit = gasleft();
         _friVerifier = FriVerifier.commit(
             _channel,
             _commitmentScheme.config.friConfig,
             proof.friProof,
             bounds
         );
+        console.log("[GAS] FriVerifier.commit:", gasBeforeCommit - gasleft());
 
+        uint256 gasBeforePow = gasleft();
         if (!_verifyProofOfWork(proof.proofOfWork, proof.config.powBits)) {
             return false;
         }
+        console.log("[GAS] _verifyProofOfWork:", gasBeforePow - gasleft());
 
+        uint256 gasBeforeMixU64 = gasleft();
         _channel.mixU64(proof.proofOfWork);
+        console.log("[GAS] mixU64:", gasBeforeMixU64 - gasleft());
 
-        return _performFinalFriCheck(proof, randomCoeff2, samplePoints);
+        uint256 gasBeforeFinalCheck = gasleft();
+        bool result = _performFinalFriCheck(proof, randomCoeff2, samplePoints);
+        console.log("[GAS] _performFinalFriCheck:", gasBeforeFinalCheck - gasleft());
+        console.log("[GAS PROFILING] Total FRI verification:", gasStart - gasleft());
+        
+        return result;
     }
 
     function _performFinalFriCheck(
@@ -200,6 +256,9 @@ contract STWOVerifier {
         uint256 nTrees,
         VerificationParams calldata params
     ) internal returns (ComponentsLib.TreeVecMaskPoints memory) {
+        uint256 gasStart = gasleft();
+        console.log("[GAS PROFILING] Starting _computeSamplePoints");
+        
         FrameworkComponentLib.ComponentState[] memory componentStates = new FrameworkComponentLib.ComponentState[](params.componentParams.length);
 
         if (TraceLocationAllocatorLib.isInitialized(_allocator)) {
@@ -256,7 +315,7 @@ contract STWOVerifier {
         maskPoints.points = newPoints;
         maskPoints.nColumnsPerTree = newNColumns;
         
-        
+        console.log("[GAS PROFILING] Total _computeSamplePoints:", gasStart - gasleft());
         return maskPoints;
     }
 
@@ -540,25 +599,38 @@ contract STWOVerifier {
         uint32[][] memory queriedValues,
         QM31Field.QM31 memory randomCoeff
     ) internal returns (bool) {
+        uint256 gasStart = gasleft();
+        console.log("[GAS PROFILING] Starting _verifyFri");
+        
+        uint256 gasBeforeSample = gasleft();
         FriVerifier.QueryPositionsByLogSize memory queryPositions = _friVerifier
             .sampleQueryPositions(_channel);
+        console.log("[GAS] sampleQueryPositions:", gasBeforeSample - gasleft());
 
+        uint256 gasBeforeMerkle = gasleft();
         bool merkleVerificationSuccess = _verifyMerkleDecommitments(
             decommitments,
             queriedValues,
             queryPositions
         );
+        console.log("[GAS] _verifyMerkleDecommitments:", gasBeforeMerkle - gasleft());
 
         if (!merkleVerificationSuccess) {
             return false;
         }        
+        
+        uint256 gasBeforeNColumns = gasleft();
         uint32[][][] memory nColumnsPerLogSizeData = getNColumnsPerLogSize(
             _commitmentScheme
         );
+        console.log("[GAS] getNColumnsPerLogSize:", gasBeforeNColumns - gasleft());
         
+        uint256 gasBeforeColumnLogSizes = gasleft();
         uint32[][] memory commitmentColumnLogSizes = _commitmentScheme
             .columnLogSizes();
+        console.log("[GAS] columnLogSizes:", gasBeforeColumnLogSizes - gasleft());
             
+        uint256 gasBeforeFriAnswers = gasleft();
         QM31Field.QM31[][] memory friAnswersResult = FriVerifier.friAnswers(
             commitmentColumnLogSizes,
             pointSamples,
@@ -567,11 +639,15 @@ contract STWOVerifier {
             queriedValues,
             nColumnsPerLogSizeData
         );
+        console.log("[GAS] friAnswers:", gasBeforeFriAnswers - gasleft());
         
+        uint256 gasBeforeDecommit = gasleft();
         bool decommitSuccess = FriVerifier.decommit(
             _friVerifier,
             friAnswersResult
         );
+        console.log("[GAS] FriVerifier.decommit:", gasBeforeDecommit - gasleft());
+        console.log("[GAS PROFILING] Total _verifyFri:", gasStart - gasleft());
         
         return decommitSuccess;
     }
@@ -597,6 +673,10 @@ contract STWOVerifier {
         uint32[][] memory queriedValues,
         FriVerifier.QueryPositionsByLogSize memory queryPositions
     ) internal view returns (bool) {
+        uint256 gasStart = gasleft();
+        console.log("[GAS PROFILING] Starting _verifyMerkleDecommitments");
+        console.log("[INFO] Number of trees:", decommitments.length);
+        
         uint32[][] memory treesColumnLogSizes = _commitmentScheme
             .columnLogSizes();
 
@@ -613,7 +693,10 @@ contract STWOVerifier {
             uint256 treeIdx = 0;
             treeIdx < treesColumnLogSizes.length;
             treeIdx++
-        ) {            
+        ) {
+            uint256 gasBeforeTree = gasleft();
+            console.log("[GAS] Processing tree:", treeIdx);
+            
             uint32[] memory columnLogSizes = treesColumnLogSizes[treeIdx];
             (
                 uint32[] memory logSizes,
@@ -632,15 +715,19 @@ contract STWOVerifier {
                     queryPositions,
                     logSizes
                 );
+            
+            uint256 gasBeforeVerify = gasleft();
             _verifyTreeDecommitment(
                 tree,
                 queriesPerLogSize,
                 queriedValues[treeIdx],
                 decommitments[treeIdx]
             );
-            
+            console.log("[GAS] Tree", treeIdx, "verification:", gasBeforeVerify - gasleft());
+            console.log("[GAS] Tree", treeIdx, "total:", gasBeforeTree - gasleft());
         }
 
+        console.log("[GAS PROFILING] Total _verifyMerkleDecommitments:", gasStart - gasleft());
         return true;
     }
 
