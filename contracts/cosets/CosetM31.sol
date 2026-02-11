@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 pragma solidity ^0.8.20;
+import {console} from "forge-std/console.sol";
 
 import "../circle/CirclePointM31.sol";
 import "../fields/M31Field.sol";
@@ -116,22 +117,27 @@ library CosetM31 {
     /// @notice Create new coset from index and log size
     function newCoset(CirclePointIndex memory initialIndex, uint32 logSizeParam)
         internal
-        pure
+        view
         returns (CosetStruct memory coset)
     {
+        uint256 gasStart = gasleft();
+        console.log("[COSET GAS] Starting newCoset");
         if (logSizeParam > M31_CIRCLE_LOG_ORDER) {
             revert LogSizeTooLarge(logSizeParam, M31_CIRCLE_LOG_ORDER);
         }
-
         CirclePointIndex memory stepSize = subgroupGen(logSizeParam);
-        
+
+        CirclePointM31.Point memory initial = indexToPoint(initialIndex);
+        CirclePointM31.Point memory step = indexToPoint(stepSize);
+
         coset = CosetStruct({
             initialIndex: initialIndex,
-            initial: indexToPoint(initialIndex),
+            initial: initial,
             stepSize: stepSize,
-            step: indexToPoint(stepSize),
+            step: step,
             logSize: logSizeParam
         });
+        console.log("[COSET GAS] newCoset total:", gasStart - gasleft());
     }
 
     /// @notice Create new coset with M31 points
@@ -167,19 +173,19 @@ library CosetM31 {
     }
 
     /// @notice Create a subgroup coset of the form <G_n>
-    function subgroup(uint32 logSizeParam) internal pure returns (CosetStruct memory coset) {
+    function subgroup(uint32 logSizeParam) internal view returns (CosetStruct memory coset) {
         CirclePointIndex memory zero = zeroIndex();
         coset = newCoset(zero, logSizeParam);
     }
 
     /// @notice Create an odds coset of the form G_2n + <G_n>
-    function odds(uint32 logSizeParam) internal pure returns (CosetStruct memory coset) {
+    function odds(uint32 logSizeParam) internal view returns (CosetStruct memory coset) {
         CirclePointIndex memory gen = subgroupGen(logSizeParam + 1);
         coset = newCoset(gen, logSizeParam);
     }
 
     /// @notice Create a half-odds coset of the form G_4n + <G_n>
-    function halfOdds(uint32 logSizeParam) internal pure returns (CosetStruct memory coset) {
+    function halfOdds(uint32 logSizeParam) internal view returns (CosetStruct memory coset) {
         CirclePointIndex memory gen = subgroupGen(logSizeParam + 2);
         coset = newCoset(gen, logSizeParam);
     }

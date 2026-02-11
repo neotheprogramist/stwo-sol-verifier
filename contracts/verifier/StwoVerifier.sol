@@ -14,6 +14,9 @@ import "../fields/QM31Field.sol";
 import "../vcs/MerkleVerifier.sol";
 import "./ProofParser.sol";
 import "../secure_poly/SecureCirclePoly.sol";
+import "../cosets/CosetM31.sol";
+import "../core/ICosetCache.sol";
+import "../core/CosetCacheStorage.sol";
 import {console} from "forge-std/console.sol";
 
 /// @title STWOVerifier
@@ -27,6 +30,7 @@ contract STWOVerifier {
     using CommitmentSchemeVerifierLib for CommitmentSchemeVerifierLib.VerifierState;
     using FriVerifier for FriVerifier.FriVerifierState;
     using PcsConfig for PcsConfig.Config;
+    using CosetM31 for CosetM31.CirclePointIndex;
 
     /// @notice Channel state for Fiat-Shamir transform
     KeccakChannelLib.ChannelState private _channel;
@@ -43,6 +47,13 @@ contract STWOVerifier {
     /// @notice FRI verifier state
     FriVerifier.FriVerifierState private _friVerifier;
 
+    /// @notice Coset cache storage contract
+    CosetCacheStorage private _cosetCache;
+
+    /// @notice Constructor - deploys cache storage
+    constructor() {
+        _cosetCache = new CosetCacheStorage();
+    }
 
     struct ComponentParams{
         uint32 logSize;
@@ -56,6 +67,11 @@ contract STWOVerifier {
         uint256 nPreprocessedColumns;
         uint32 componentsCompositionLogDegreeBound;
     }
+
+    error EmptyColumnBounds();
+    error ColumnBoundsNotSorted();
+    error InvalidNumFriLayers();
+    error LastLayerDegreeInvalid();
 
     /// @notice Verify a STARK proof
     function verify(
@@ -206,14 +222,20 @@ contract STWOVerifier {
         CirclePolyDegreeBound.Bound[] memory bounds = _commitmentScheme.calculateBounds();
         console.log("[GAS] calculateBounds:", gasBeforeBounds - gasleft());
 
+        uint256 gasBeforeCache = gasleft();
+        PcsConfig.FriConfig memory friConfigCache = _commitmentScheme.config.friConfig;
+        console.log("[GAS] Cache config:", gasBeforeCache - gasleft());
+
         uint256 gasBeforeCommit = gasleft();
         _friVerifier = FriVerifier.commit(
             _channel,
-            _commitmentScheme.config.friConfig,
+            friConfigCache, 
             proof.friProof,
             bounds
         );
-        console.log("[GAS] FriVerifier.commit:", gasBeforeCommit - gasleft());
+        uint256 totalCommitGas = gasBeforeCommit - gasleft();
+        console.log("[GAS] INLINE FriVerifier.commit (total):", totalCommitGas);
+        // console.log("[GAS] FriVerifier.commit (overhead):", totalCommitGas > 702115 ? totalCommitGas - 702115 : 0);
 
         uint256 gasBeforePow = gasleft();
         if (!_verifyProofOfWork(proof.proofOfWork, proof.config.powBits)) {
@@ -238,17 +260,24 @@ contract STWOVerifier {
         QM31Field.QM31 memory randomCoeff2,
         ComponentsLib.TreeVecMaskPoints memory samplePoints
     ) private returns (bool) {
+
+        uint256 gasStartZipSamplePoints = gasleft();
         FriVerifier.PointSample[][][] memory pointSamples = _zipSamplePointsWithValues(
             samplePoints,
             proof.sampledValues
         );
-
-        return _verifyFri(
+        console.log("[GAS] _zipSamplePointsWithValues:", gasStartZipSamplePoints - gasleft());
+       
+        uint256 gasStartVerifyFri = gasleft();
+        bool result = _verifyFri(
             pointSamples,
             proof.decommitments,
             proof.queriedValues,
             randomCoeff2
         );
+        console.log("[GAS] _verifyFri:", gasStartVerifyFri - gasleft());
+
+        return result;
     }
     /// @notice Compute sample points for OODS evaluation
     function _computeSamplePoints(
@@ -644,7 +673,8 @@ contract STWOVerifier {
         uint256 gasBeforeDecommit = gasleft();
         bool decommitSuccess = FriVerifier.decommit(
             _friVerifier,
-            friAnswersResult
+            friAnswersResult,
+            ICosetCache(_cosetCache)
         );
         console.log("[GAS] FriVerifier.decommit:", gasBeforeDecommit - gasleft());
         console.log("[GAS PROFILING] Total _verifyFri:", gasStart - gasleft());

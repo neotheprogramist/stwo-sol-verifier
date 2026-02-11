@@ -240,7 +240,7 @@ library FrameworkComponentLib {
         return samplePoints;
     }
 
-    function _getTraceStep(uint32 logSize) private pure returns (CirclePointM31.Point memory) {
+    function _getTraceStep(uint32 logSize) private view returns (CirclePointM31.Point memory) {
         CanonicCosetM31.CanonicCosetStruct memory canonicCosetM31 = CanonicCosetM31.newCanonicCoset(logSize);
         return CanonicCosetM31.step(canonicCosetM31);
     }

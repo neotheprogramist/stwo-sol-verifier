@@ -132,7 +132,7 @@ library CircleDomain {
     /// @notice Split a circle domain into smaller domains with offsets
     function split(CircleDomainStruct memory domain, uint32 logParts)
         internal
-        pure
+        view
         returns (CircleDomainStruct memory subdomain, CosetM31.CirclePointIndex[] memory shifts)
     {
         require(logParts <= domain.halfCoset.logSize, "logParts too large");

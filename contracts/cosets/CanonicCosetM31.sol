@@ -28,7 +28,7 @@ library CanonicCosetM31 {
     /// @return canonicCoset New canonical coset
     function newCanonicCoset(uint32 logSize) 
         internal 
-        pure 
+        view 
         returns (CanonicCosetStruct memory canonicCoset) 
     {
         if (logSize == 0 || logSize > CosetM31.M31_CIRCLE_LOG_ORDER) {
@@ -59,7 +59,7 @@ library CanonicCosetM31 {
     /// @return halfCosetResult Half-sized coset (G_4n + <G_n>)
     function halfCoset(CanonicCosetStruct memory canonicCoset) 
         internal 
-        pure 
+        view 
         returns (CosetM31.CosetStruct memory halfCosetResult) 
     {
         // Rust: Coset::half_odds(self.log_size() - 1)
