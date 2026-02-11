@@ -1,12 +1,13 @@
 use alloy::primitives::Address;
 use anyhow::Result;
 use clap::{Arg, Command};
-use contracts::{STWOVerifier, VerifierInput};
+// use contracts::{STWOVerifier, VerifierInput};
+// use stwo_prover::core::{channel::Blake2sChannel, vcs::blake2_merkle::Blake2sMerkleChannel};
 use verifier::deploy::{AnvilConfig, DeploymentResult, STWOVerifierDeployer};
 
 mod fibonacci_circuit;
-mod prove;
-mod verify;
+mod gnark_json_gen;
+mod prove_blake;
 
 /// Fibonacci STARK proof verification example
 #[tokio::main]
@@ -24,6 +25,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Arg::new("only-verify")
                 .long("only-verify")
                 .help("Only verify using existing contract (requires --node-url and --contract-address)")
+                .action(clap::ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("prepare-gnark-proof")
+                .long("prepare-gnark-proof")
+                .help("Generate proof and verification parameters JSON files for Gnark")
                 .action(clap::ArgAction::SetTrue),
         )
         .arg(
@@ -51,9 +58,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🧮 Fibonacci STARK Verifier Example");
     println!("===================================");
 
+    if matches.get_flag("prepare-gnark-proof") {
+        println!("📝 Preparing Gnark proof and parameters...");
+        prepare_gnark_json().await?;
+        println!("✅ Gnark JSON files created: proof.json, params.json");
+        return Ok(());
+    }
+
     // Handle --only-verify flag first
     if matches.get_flag("only-verify") {
-        let node_url = matches
+        let _ = matches
             .get_one::<String>("node-url")
             .ok_or("--node-url is required when using --only-verify")?;
         let contract_address = matches
@@ -61,22 +75,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .ok_or("--contract-address is required when using --only-verify")?;
 
         // Parse contract address
-        let verifier_address: Address = contract_address
+        let _: Address = contract_address
             .parse()
             .map_err(|_| "Invalid contract address format")?;
 
         // Prepare verification data
-        let verifier_input = prepare_fibonacci_verification().await?;
+        // let verifier_input = prepare_fibonacci_verification().await?;
 
-        // Connect to existing contract and verify
-        verify_with_existing_contract(node_url, verifier_address, verifier_input).await?;
+        // // Connect to existing contract and verify
+        // verify_with_existing_contract(node_url, verifier_address, verifier_input).await?;
 
         println!("\n🎉 Fibonacci verification completed!");
         return Ok(());
     }
 
     // Step 1: Deploy STWOVerifier contract
-    let (deployment_result, deployer) = deploy_verifier().await?;
+    let (deployment_result, _) = deploy_verifier().await?;
 
     if matches.get_flag("only-deploy") {
         println!(
@@ -98,16 +112,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         sequence_length
     );
 
-    // Step 3: Prepare verification data
-    let verifier_input = prepare_fibonacci_verification().await?;
+    // // Step 3: Prepare verification data
+    // let verifier_input = prepare_fibonacci_verification().await?;
 
-    // Step 4: Interact with deployed contract
-    interact_with_verifier(
-        deployment_result.verifier_address,
-        verifier_input,
-        &deployer,
-    )
-    .await?;
+    // // Step 4: Interact with deployed contract
+    // interact_with_verifier(
+    //     deployment_result.verifier_address,
+    //     verifier_input,
+    //     &deployer,
+    // )
+    // .await?;
 
     println!("\n🎉 Fibonacci verification example completed!");
     Ok(())
@@ -135,192 +149,92 @@ async fn deploy_verifier() -> Result<(DeploymentResult, STWOVerifierDeployer)> {
 
     Ok((result, deployer))
 }
+async fn prepare_gnark_json() -> Result<(), Box<dyn std::error::Error>> {
+    use crate::fibonacci_circuit::{FibonacciComponent, FibonacciEval};
+    use crate::gnark_json_gen::{convert_stark_proof, convert_verification_params};
+    use crate::prove_blake::Metadata;
+    use num_traits::Zero;
+    use stwo_prover::core::air::Component;
+    use stwo_prover::core::backend::simd::SimdBackend;
+    use stwo_prover::core::channel::Blake2sChannel;
+    use stwo_prover::core::fields::qm31::SecureField;
+    use stwo_prover::core::pcs::CommitmentSchemeVerifier;
+    use stwo_prover::core::poly::circle::SecureCirclePoly;
+    use stwo_prover::core::prover::StarkProof;
+    use stwo_prover::core::vcs::blake2_merkle::{Blake2sMerkleChannel, Blake2sMerkleHasher};
+    use stwo_prover::constraint_framework::TraceLocationAllocator;
+    use stwo_polynomial::verify::verify_with_queries;
 
-async fn prepare_fibonacci_verification() -> Result<VerifierInput, Box<dyn std::error::Error>> {
-    let (proof, composition_polynomial, metadata) = prove::prove_fibonacci()?;
-    let verifier_input = verify::verify_and_prepare_on_chain_proof_fibonacci(
-        proof,
-        composition_polynomial,
-        metadata,
+    // 1. Generate Proof
+    let (proof, composition_polynomial, metadata): (
+        StarkProof<Blake2sMerkleHasher>,
+        SecureCirclePoly<SimdBackend>,
+        Metadata,
+    ) = prove_blake::prove_fibonacci()?;
+
+    // 2. Run off-chain verification (Blake2s)
+    prove_blake::verify_fibonacci_blake(proof.clone(), SecureCirclePoly::<SimdBackend>(composition_polynomial.clone()), metadata.clone())?;
+
+    // 3. Prepare JSON for Proof
+    let proof_json = convert_stark_proof(proof.clone(), SecureCirclePoly::<SimdBackend>(composition_polynomial.clone()));
+    let proof_file = std::fs::File::create("proof.json")?;
+    serde_json::to_writer_pretty(proof_file, &proof_json)?;
+
+    // 3. Prepare Verification Params (requires partial verification to get digest)
+
+    // Recreate component from metadata
+    let component = FibonacciComponent::new(
+        &mut TraceLocationAllocator::default(),
+        FibonacciEval {
+            log_n_rows: metadata.log_size,
+        },
+        SecureField::zero(),
+    );
+
+    let config = proof.config;
+    let verify_channel = &mut Blake2sChannel::default();
+    let mut verify_commitment_scheme = CommitmentSchemeVerifier::<Blake2sMerkleChannel>::new(config);
+
+    // Channel commitments
+    verify_commitment_scheme.commit(
+        proof.commitments[0],
+        &component.trace_log_degree_bounds()[0],
+        verify_channel,
+    );
+    verify_commitment_scheme.commit(
+        proof.commitments[1],
+        &component.trace_log_degree_bounds()[1],
+        verify_channel,
+    );
+
+    // Get digest (state before verify)
+    let digest = verify_channel.digest();
+
+    // Run off-chain verify to ensure it's valid and to get preprocessed columns info if needed (though here it's static)
+    verify_with_queries(
+        &[&component],
+        verify_channel,
+        &mut verify_commitment_scheme,
+        proof.clone(),
+        SecureCirclePoly::<SimdBackend>(composition_polynomial.clone()),
     )?;
 
-    Ok(verifier_input)
-}
+    
+    // Prepare JSON for Params
+    let n_preprocessed_columns = verify_commitment_scheme.trees[0] // PREPROCESSED_TRACE_IDX is 0
+        .column_log_sizes
+        .len();
 
-/// Interact with the deployed verifier contract
-async fn interact_with_verifier(
-    verifier_address: Address,
-    verifier_input: VerifierInput,
-    deployer: &STWOVerifierDeployer,
-) -> Result<()> {
-    use alloy::{
-        network::EthereumWallet, providers::ProviderBuilder, signers::local::PrivateKeySigner,
-    };
-
-    println!("\n🔗 Connecting to verifier contract...");
-    println!("   Contract Address: {:?}", verifier_address);
-
-    // Get deployment info to reuse the same Anvil instance
-    let deployment_info = deployer.get_info();
-    let rpc_url = deployment_info.rpc_url.parse()?;
-
-    // Use the same private key as deployer (Anvil's default account #0)
-    let signer: PrivateKeySigner = deployer.get_signer().await?;
-
-    let wallet = EthereumWallet::from(signer);
-    let provider = ProviderBuilder::new().wallet(wallet).connect_http(rpc_url);
-
-    // Create contract instance
-    let contract = STWOVerifier::new(verifier_address, &provider);
-
-    // Call the verify function
-    println!("\n⚡ Calling contract verify function...");
-
-    let verification_call = contract.verify(
-        verifier_input.proof.clone(),
-        verifier_input.verificationParams.clone(),
-        verifier_input.treeRoots.clone(),
-        verifier_input.treeColumnLogSizes.clone(),
-        verifier_input.digest.clone(),
-        verifier_input.nDraws,
+    let params_json = convert_verification_params(
+        vec![component],
+        n_preprocessed_columns,
+        &proof,
+        digest.0,
     );
 
-    // Execute the call and get transaction receipt to track gas
-    match verification_call.send().await {
-        Ok(pending_tx) => {
-            println!("   Transaction sent, waiting for confirmation...");
-            let receipt = pending_tx.get_receipt().await?;
+    let params_file = std::fs::File::create("params.json")?;
+    serde_json::to_writer_pretty(params_file, &params_json)?;
 
-            println!("⛽ Gas Usage Information:");
-            println!("   Gas Used: {}", receipt.gas_used);
-            let gas_price = receipt.effective_gas_price;
-            let gas_cost_wei = receipt.gas_used as u128 * gas_price;
-            let gas_cost_eth = gas_cost_wei as f64 / 1e18;
-            println!("   Gas Price: {} wei", gas_price);
-            println!(
-                "   Total Cost: {} wei ({:.8} ETH)",
-                gas_cost_wei, gas_cost_eth
-            );
-
-            // Check transaction status for verification result
-            if receipt.status() {
-                println!("✅ Verification transaction successful!");
-
-                // To get the actual return value, we need to call the view function
-                let view_result = verification_call.call().await?;
-
-                if view_result {
-                    println!("🎯 Verification PASSED! The Fibonacci proof is valid.");
-                } else {
-                    println!("❌ Verification FAILED! The proof was rejected.");
-                }
-            } else {
-                println!("💥 Verification transaction failed!");
-            }
-        }
-        Err(e) => {
-            println!("💥 Contract call failed: {}", e);
-            return Err(e.into());
-        }
-    }
-
-    println!("🏁 Contract interaction completed successfully!");
-    Ok(())
-}
-
-/// Verify using an existing deployed contract on a specific network
-async fn verify_with_existing_contract(
-    node_url: &str,
-    verifier_address: Address,
-    verifier_input: VerifierInput,
-) -> Result<()> {
-    use alloy::{
-        network::EthereumWallet, providers::ProviderBuilder, signers::local::PrivateKeySigner,
-    };
-
-    println!("\n🔗 Connecting to existing verifier contract...");
-    println!("   Node URL: {}", node_url);
-    println!("   Contract Address: {:?}", verifier_address);
-
-    let rpc_url = node_url.parse()?;
-
-    // For external networks, we need a private key from environment or user input
-    // For now, we'll use a default private key (user should provide their own in production)
-    let private_key = std::env::var("PRIVATE_KEY").unwrap_or_else(|_| {
-        "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80".to_string()
-    }); // Default anvil key
-
-    let signer: PrivateKeySigner = private_key
-        .parse()
-        .map_err(|_| "Invalid private key format")
-        .unwrap();
-
-    let wallet = EthereumWallet::from(signer);
-    let provider = ProviderBuilder::new().wallet(wallet).connect_http(rpc_url);
-
-    // Create contract instance
-    let contract = STWOVerifier::new(verifier_address, &provider);
-
-    // Call the verify function
-    println!("\n⚡ Calling contract verify function...");
-
-    let verification_call = contract.verify(
-        verifier_input.proof.clone(),
-        verifier_input.verificationParams.clone(),
-        verifier_input.treeRoots.clone(),
-        verifier_input.treeColumnLogSizes.clone(),
-        verifier_input.digest.clone(),
-        verifier_input.nDraws,
-    );
-
-    let view_result = verification_call.call().await?;
-
-    if view_result {
-        println!("🎯 Verification PASSED! The Fibonacci proof is valid.");
-    } else {
-        println!("❌ Verification FAILED! The proof was rejected.");
-    };
-
-    // // Execute the call and get transaction receipt to track gas
-    // match verification_call.send().await {
-    //     Ok(pending_tx) => {
-    //         println!("   Transaction sent, waiting for confirmation...");
-    //         let receipt = pending_tx.get_receipt().await?;
-
-    //         println!("⛽ Gas Usage Information:");
-    //         println!("   Gas Used: {}", receipt.gas_used);
-    //         let gas_price = receipt.effective_gas_price;
-    //         let gas_cost_wei = receipt.gas_used as u128 * gas_price;
-    //         let gas_cost_eth = gas_cost_wei as f64 / 1e18;
-    //         println!("   Gas Price: {} wei", gas_price);
-    //         println!(
-    //             "   Total Cost: {} wei ({:.8} ETH)",
-    //             gas_cost_wei, gas_cost_eth
-    //         );
-
-    //         // Check transaction status for verification result
-    //         if receipt.status() {
-    //             println!("✅ Verification transaction successful!");
-
-    //             // To get the actual return value, we need to call the view function
-    //             let view_result = verification_call.call().await?;
-
-    //             if view_result {
-    //                 println!("🎯 Verification PASSED! The Fibonacci proof is valid.");
-    //             } else {
-    //                 println!("❌ Verification FAILED! The proof was rejected.");
-    //             }
-    //         } else {
-    //             println!("💥 Verification transaction failed!");
-    //         }
-    //     }
-    //     Err(e) => {
-    //         println!("💥 Contract call failed: {}", e);
-    //         return Err(e.into());
-    //     }
-    // }
-
-    println!("🏁 Contract verification completed successfully!");
     Ok(())
 }
 
@@ -338,4 +252,6 @@ mod tests {
 
         Ok(())
     }
+
+
 }

@@ -1,12 +1,12 @@
-use stwo::core::fields::m31::BaseField;
-use stwo::core::poly::circle::CanonicCoset;
+use stwo_prover::core::fields::m31::BaseField;
+use stwo_prover::core::poly::circle::CanonicCoset;
 
-use stwo::core::ColumnVec;
-use stwo::prover::backend::simd::SimdBackend;
-use stwo::prover::backend::{Col, Column};
-use stwo::prover::poly::circle::CircleEvaluation;
-use stwo::prover::poly::BitReversedOrder;
-use stwo_constraint_framework::{EvalAtRow, FrameworkComponent, FrameworkEval};
+use stwo_prover::core::ColumnVec;
+use stwo_prover::core::backend::simd::SimdBackend;
+use stwo_prover::core::backend::{Col, Column};
+use stwo_prover::core::poly::circle::CircleEvaluation;
+use stwo_prover::core::poly::BitReversedOrder;
+use stwo_prover::constraint_framework::{EvalAtRow, FrameworkComponent, FrameworkEval};
 
 #[derive(Clone)]
 pub struct FibonacciEval {
