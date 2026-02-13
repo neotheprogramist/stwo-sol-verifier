@@ -1,4 +1,5 @@
 mod poseidon_hash;
+mod gnark_json_gen;
 
 use poseidon_hash::*;
 use stwo_prover::core::fields::m31::BaseField;

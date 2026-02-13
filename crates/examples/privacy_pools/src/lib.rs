@@ -4,6 +4,7 @@ pub mod poseidon_hash;
 pub mod privacy_pool;
 pub mod relations;
 pub mod scheduler;
+pub mod gnark_json_gen;
 
 pub use merkle_membership::{
     gen_merkle_is_active_column, gen_merkle_is_first_column, gen_merkle_is_last_column,
