@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/contracts", "crates/verifier", "crates/examples/fibonacci"]
+members = ["crates/contracts", "crates/verifier", "crates/examples/fibonacci", "crates/examples/privacy_pools"]
 
 
 [workspace.package]
