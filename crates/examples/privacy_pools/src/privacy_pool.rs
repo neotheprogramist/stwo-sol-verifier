@@ -10,17 +10,21 @@ mod tests {
     use serde_json::json;
     use stwo_polynomial::prove::prove;
     use stwo_polynomial::verify::verify_with_queries;
-    use stwo_prover::constraint_framework::{TraceLocationAllocator, FrameworkEval};
+    use stwo_prover::constraint_framework::preprocessed_columns::PreProcessedColumnId;
+    use stwo_prover::constraint_framework::{FrameworkEval, TraceLocationAllocator};
     use stwo_prover::core::air::Component;
     use stwo_prover::core::backend::simd::SimdBackend;
     use stwo_prover::core::channel::Blake2sChannel;
     use stwo_prover::core::fields::m31::BaseField;
-    use stwo_prover::core::pcs::{CommitmentSchemeProver, CommitmentSchemeVerifier, PcsConfig};
+    use stwo_prover::core::fields::qm31::SecureField;
+    use stwo_prover::core::pcs::{
+        CommitmentSchemeProver, CommitmentSchemeVerifier, PcsConfig, TreeVec,
+    };
     use stwo_prover::core::poly::circle::{CanonicCoset, PolyOps, SecureCirclePoly};
     use stwo_prover::core::queries::QueriesWithBranching;
     use stwo_prover::core::vcs::blake2_merkle::Blake2sMerkleChannel;
 
-    use crate::gnark_json_gen::{convert_stark_proof, convert_verification_params, ComponentInfo};
+    use crate::gnark_json_gen::{convert_stark_proof, convert_verification_params};
     use crate::merkle_membership::{
         gen_merkle_is_active_column, gen_merkle_is_first_column, gen_merkle_is_last_column,
         gen_merkle_is_step_column, gen_merkle_membership_interaction_trace, gen_merkle_trace,
@@ -33,7 +37,10 @@ mod tests {
         is_last_column_id, is_step_column_id, ChainInputs, PoseidonChainComponent,
         PoseidonChainEval,
     };
-    use crate::privacy_pool::{build_branching, build_column_bounds, build_deduped_queries_shape, build_fri_inner_layer_branching, build_positions_with_pairs, build_queries_by_log_size};
+    use crate::privacy_pool::{
+        build_branching, build_column_bounds, build_deduped_queries_shape,
+        build_fri_inner_layer_branching, build_positions_with_pairs, build_queries_by_log_size,
+    };
     use crate::relations::{LeafRelation, RefundLeafRelation, RootRelation};
     use crate::scheduler::{
         gen_is_first_column as gen_scheduler_is_first_column, gen_scheduler_interaction_trace,
@@ -431,6 +438,12 @@ mod tests {
         );
 
         let digest = verifier_channel.digest();
+        let trees_extended_log_sizes: Vec<Vec<u32>> = commitment_scheme_verifier
+            .trees
+            .iter()
+            .map(|tree| tree.column_log_sizes.clone())
+            .collect();
+
         let queries_with_column_log_sizes = verify_with_queries(
             &[
                 &deposit_component_v,
@@ -441,17 +454,19 @@ mod tests {
             verifier_channel,
             &mut commitment_scheme_verifier,
             proof.clone(),
-            SecureCirclePoly::<SimdBackend>(composition_poly.clone())
-        ).unwrap();
+            SecureCirclePoly::<SimdBackend>(composition_poly.clone()),
+        )
+        .unwrap();
         let inner_layers_len = proof.fri_proof.inner_layers.len();
 
         let (QueriesWithBranching { queries, branching }, column_log_sizes) =
             queries_with_column_log_sizes.clone();
-        
+
         let mut queries_branching = branching;
         let deduped_shape = build_deduped_queries_shape(queries.clone());
         let base_queries = build_queries_by_log_size(queries);
-        let column_bounds = build_column_bounds(&[column_log_sizes.clone()
+        let column_bounds = build_column_bounds(&[column_log_sizes
+            .clone()
             .flatten()
             .iter()
             .map(|&x| x as u64)
@@ -475,75 +490,68 @@ mod tests {
         });
         std::fs::write(&shape_path, serde_json::to_string_pretty(&payload).unwrap()).unwrap();
 
-        println!("  📋 Queries with branching: {:?}", queries_with_column_log_sizes);
+        println!(
+            "  📋 Queries with branching: {:?}",
+            queries_with_column_log_sizes
+        );
         println!("  ✅ Off-chain verification PASSED\n");
 
-        let stark_proof = convert_stark_proof(proof.clone(), SecureCirclePoly::<SimdBackend>(composition_poly.clone()));
-        let proof_file = std::fs::File::create("proof.json").unwrap();
+        let stark_proof = convert_stark_proof(
+            proof.clone(),
+            SecureCirclePoly::<SimdBackend>(composition_poly.clone()),
+        );
+        let proof_file = std::fs::File::create("privacy_pools_proof.json").unwrap();
         serde_json::to_writer_pretty(proof_file, &stark_proof).unwrap();
 
         let n_preprocessed_columns = commitment_scheme_verifier.trees[0] // PREPROCESSED_TRACE_IDX is 0
-        .column_log_sizes
-        .len();
+            .column_log_sizes
+            .len();
 
-        // Prepare component information
-        let component_infos = vec![
-            ComponentInfo {
-                max_constraint_log_degree_bound: deposit_component_v.max_constraint_log_degree_bound(),
-                log_size: deposit_component_v.log_size(),
-                mask_offsets: deposit_component_v.info.mask_offsets.0.iter().map(|tree| {
-                    tree.iter().map(|col| col.iter().map(|&off| off as i32).collect()).collect()
-                }).collect(),
-                preprocessed_columns: deposit_component_v.info.preprocessed_columns.iter().enumerate().map(|(i, _)| i).collect(),
-                claimed_sum: deposit_component_v.claimed_sum(),
-                trace_log_degree_bounds: deposit_component_v.trace_log_degree_bounds().to_vec(),
-            },
-            ComponentInfo {
-                max_constraint_log_degree_bound: refund_component_v.max_constraint_log_degree_bound(),
-                log_size: refund_component_v.log_size(),
-                mask_offsets: refund_component_v.info.mask_offsets.0.iter().map(|tree| {
-                    tree.iter().map(|col| col.iter().map(|&off| off as i32).collect()).collect()
-                }).collect(),
-                preprocessed_columns: refund_component_v.info.preprocessed_columns.iter().enumerate().map(|(i, _)| i).collect(),
-                claimed_sum: refund_component_v.claimed_sum(),
-                trace_log_degree_bounds: refund_component_v.trace_log_degree_bounds().to_vec(),
-            },
-            ComponentInfo {
-                max_constraint_log_degree_bound: merkle_component_v.max_constraint_log_degree_bound(),
-                log_size: merkle_component_v.log_size(),
-                mask_offsets: merkle_component_v.info.mask_offsets.0.iter().map(|tree| {
-                    tree.iter().map(|col| col.iter().map(|&off| off as i32).collect()).collect()
-                }).collect(),
-                preprocessed_columns: merkle_component_v.info.preprocessed_columns.iter().enumerate().map(|(i, _)| i).collect(),
-                claimed_sum: merkle_component_v.claimed_sum(),
-                trace_log_degree_bounds: merkle_component_v.trace_log_degree_bounds().to_vec(),
-            },
-            ComponentInfo {
-                max_constraint_log_degree_bound: scheduler_component_v.max_constraint_log_degree_bound(),
-                log_size: scheduler_component_v.log_size(),
-                mask_offsets: scheduler_component_v.info.mask_offsets.0.iter().map(|tree| {
-                    tree.iter().map(|col| col.iter().map(|&off| off as i32).collect()).collect()
-                }).collect(),
-                preprocessed_columns: scheduler_component_v.info.preprocessed_columns.iter().enumerate().map(|(i, _)| i).collect(),
-                claimed_sum: scheduler_component_v.claimed_sum(),
-                trace_log_degree_bounds: scheduler_component_v.trace_log_degree_bounds().to_vec(),
-            },
+        let components_claimed_sum: Vec<SecureField> = vec![
+            deposit_component_v.claimed_sum(),
+            refund_component_v.claimed_sum(),
+            merkle_component_v.claimed_sum(),
+            scheduler_component_v.claimed_sum(),
+        ];
+        let components_preprocessed_columns: Vec<Vec<PreProcessedColumnId>> = vec![
+            deposit_component_v.info.preprocessed_columns.clone(),
+            refund_component_v.info.preprocessed_columns.clone(),
+            merkle_component_v.info.preprocessed_columns.clone(),
+            scheduler_component_v.info.preprocessed_columns.clone(),
+        ];
+
+        let components_log_sizes = vec![
+            deposit_component_v.log_size(),
+            refund_component_v.log_size(),
+            merkle_component_v.log_size(),
+            scheduler_component_v.log_size(),
+        ];
+
+        let components_mask_offsets: Vec<TreeVec<Vec<Vec<isize>>>> = vec![
+            deposit_component_v.info.mask_offsets.clone(),
+            refund_component_v.info.mask_offsets.clone(),
+            merkle_component_v.info.mask_offsets.clone(),
+            scheduler_component_v.info.mask_offsets.clone(),
         ];
 
         let verification_params = convert_verification_params(
-            &component_infos,
-            &[
+            vec![
                 &deposit_component_v as &dyn Component,
                 &refund_component_v as &dyn Component,
                 &merkle_component_v as &dyn Component,
                 &scheduler_component_v as &dyn Component,
             ],
+            components_log_sizes,
             n_preprocessed_columns,
+            components_mask_offsets,
+            components_claimed_sum,
+            components_preprocessed_columns,
+            trees_extended_log_sizes,
             &proof,
             digest.0,
         );
 
-        let params_file = std::fs::File::create("params.json").unwrap();
+        let params_file = std::fs::File::create("privacy_pools_params.json").unwrap();
         serde_json::to_writer_pretty(params_file, &verification_params).unwrap();
     }
 }

@@ -7,7 +7,7 @@ use verifier::deploy::{AnvilConfig, DeploymentResult, STWOVerifierDeployer};
 
 mod fibonacci_circuit;
 mod gnark_json_gen;
-mod prove_blake;
+mod prove_fibonacci_blake;
 
 /// Fibonacci STARK proof verification example
 #[tokio::main]
@@ -152,7 +152,7 @@ async fn deploy_verifier() -> Result<(DeploymentResult, STWOVerifierDeployer)> {
 async fn prepare_gnark_json() -> Result<(), Box<dyn std::error::Error>> {
     use crate::fibonacci_circuit::{FibonacciComponent, FibonacciEval};
     use crate::gnark_json_gen::{convert_stark_proof, convert_verification_params};
-    use crate::prove_blake::Metadata;
+    use crate::prove_fibonacci_blake::Metadata;
     use num_traits::Zero;
     use stwo_prover::core::air::Component;
     use stwo_prover::core::backend::simd::SimdBackend;
@@ -170,10 +170,10 @@ async fn prepare_gnark_json() -> Result<(), Box<dyn std::error::Error>> {
         StarkProof<Blake2sMerkleHasher>,
         SecureCirclePoly<SimdBackend>,
         Metadata,
-    ) = prove_blake::prove_fibonacci()?;
+    ) = prove_fibonacci_blake::prove_fibonacci()?;
 
     // 2. Run off-chain verification (Blake2s)
-    prove_blake::verify_fibonacci_blake(proof.clone(), SecureCirclePoly::<SimdBackend>(composition_polynomial.clone()), metadata.clone())?;
+    prove_fibonacci_blake::verify_fibonacci_blake(proof.clone(), SecureCirclePoly::<SimdBackend>(composition_polynomial.clone()), metadata.clone())?;
 
     // 3. Prepare JSON for Proof
     let proof_json = convert_stark_proof(proof.clone(), SecureCirclePoly::<SimdBackend>(composition_polynomial.clone()));

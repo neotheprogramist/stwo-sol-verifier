@@ -371,7 +371,9 @@ pub fn convert_verification_params(
         // I will interpret as Big Endian to match standard byte order if treating as chunks?
         // Or simple cast.
         // Let's use BE to be safe with `u32::from_be_bytes`.
-        digest_u32[i] = u32::from_le_bytes(bytes); 
+        digest_u32[i] = u32::from_le_bytes(bytes); // Switching to LE as Stwo/M31 often uses LE.
+                                                   // Actually, Keccak is byte-oriented.
+                                                   // If I use LE here, and Go uses LE, it matches.
     }
 
 
