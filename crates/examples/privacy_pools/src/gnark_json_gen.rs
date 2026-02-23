@@ -1,4 +1,5 @@
 use serde::Serialize;
+use std::collections::HashMap;
 use stwo_prover::constraint_framework::preprocessed_columns::PreProcessedColumnId;
 use stwo_prover::constraint_framework::FrameworkComponent;
 use stwo_prover::constraint_framework::FrameworkEval;
@@ -315,6 +316,16 @@ pub fn convert_verification_params(
     proof: &StarkProof<Blake2sMerkleHasher>, // needed for tree roots etc
     channel_digest: [u8; 32],
 ) -> VerificationParamsDef {
+    let mut preprocessed_index_by_id: HashMap<String, usize> = HashMap::new();
+    for component_columns in &components_preprocessed_columns {
+        for col_id in component_columns {
+            let next_idx = preprocessed_index_by_id.len();
+            preprocessed_index_by_id
+                .entry(col_id.id.clone())
+                .or_insert(next_idx);
+        }
+    }
+
     let mut component_params = Vec::new();
     for (i, comp) in components.iter().enumerate() {
         let info = ComponentInfoDef {
@@ -331,8 +342,11 @@ pub fn convert_verification_params(
                 .collect(),
             preprocessed_columns: components_preprocessed_columns[i]
                 .iter()
-                .enumerate()
-                .map(|(i, _)| i)
+                .map(|col_id| {
+                    *preprocessed_index_by_id
+                        .get(&col_id.id)
+                        .expect("missing preprocessed column index")
+                })
                 .collect(),
         };
 
