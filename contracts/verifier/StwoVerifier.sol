@@ -60,46 +60,54 @@ contract STWOVerifier {
     function verify(
         ProofParser.Proof calldata proof,
         VerificationParams calldata params,
-        bytes32[] memory treeRoots,
         uint32[][] memory treeColumnLogSizes,
-        bytes32 digest,
-        uint32 nDraws
+        uint64[] calldata publicInputs
     ) external returns (bool) {
-        return _verifyProof(proof, params, treeRoots, treeColumnLogSizes, digest, nDraws);
+        return _verifyProof(proof, params, treeColumnLogSizes, publicInputs);
     }
 
     function _verifyProof(
         ProofParser.Proof calldata proof,
         VerificationParams calldata params,
-        bytes32[] memory treeRoots,
         uint32[][] memory treeColumnLogSizes,
-        bytes32 digest,
-        uint32 nDraws
+        uint64[] calldata publicInputs
     ) private returns (bool) {
         if (_components.isInitialized) {
             _components.reset();
         }
         
         SecureCirclePoly.SecurePoly memory poly = _createSecurePoly(proof.compositionPoly);
-        _initializeVerification(proof, treeRoots, treeColumnLogSizes, digest, nDraws);
+        _initializeVerification(proof, treeColumnLogSizes, publicInputs);
         
         return _performVerificationSteps(proof, params, poly);
     }
 
     function _initializeVerification(
         ProofParser.Proof calldata proof,
-        bytes32[] memory treeRoots,
         uint32[][] memory treeColumnLogSizes,
-        bytes32 digest,
-        uint32 nDraws
+        uint64[] calldata publicInputs
     ) private {
-        KeccakChannelLib.initializeWith(_channel, digest, nDraws);
-        CommitmentSchemeVerifierLib.initialize(
-            _commitmentScheme,
-            proof.config,
-            treeRoots,
-            treeColumnLogSizes
-        );        
+        KeccakChannelLib.initialize(_channel);
+        CommitmentSchemeVerifierLib.initializeEmpty(_commitmentScheme, proof.config);
+
+        for (uint256 i = 0; i < publicInputs.length; i++) {
+            _channel.mixU64(publicInputs[i]);
+        }
+
+        require(
+            treeColumnLogSizes.length + 1 == proof.commitments.length,
+            "Commitments/log sizes mismatch"
+        );
+
+        for (uint256 i = 0; i < treeColumnLogSizes.length; i++) {
+            CommitmentSchemeVerifierLib.commit(
+                _commitmentScheme,
+                proof.commitments[i],
+                treeColumnLogSizes[i],
+                _channel
+            );
+        }
+
         _channel.drawSecureFelt();
 
     }

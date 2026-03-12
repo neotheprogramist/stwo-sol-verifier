@@ -34,10 +34,8 @@ sol!(
     struct VerifierInput{
         Proof proof;
         VerificationParams verificationParams;
-        bytes32[] treeRoots;
         uint32[][]  treeColumnLogSizes;
-        bytes32 digest;
-        uint32 nDraws;
+        uint64[] publicInputs;
     }
 );
 pub use STWOVerifier::*;
