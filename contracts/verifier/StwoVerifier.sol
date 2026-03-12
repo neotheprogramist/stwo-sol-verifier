@@ -208,11 +208,6 @@ contract STWOVerifier {
         TraceLocationAllocatorLib.initialize(_allocator);
         
         for (uint256 i = 0; i < params.componentParams.length; i++) {
-            if (i > 0) {
-                TraceLocationAllocatorLib.reset(_allocator);
-                TraceLocationAllocatorLib.initialize(_allocator);
-            }
-            
             FrameworkComponentLib.ComponentState memory componentState = FrameworkComponentLib.createComponent(_allocator, params.componentParams[i].logSize, params.componentParams[i].claimedSum, params.componentParams[i].info);
             componentStates[i] = componentState;
         }

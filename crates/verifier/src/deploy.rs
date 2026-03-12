@@ -159,11 +159,14 @@ impl STWOVerifierDeployer {
     }
 
     /// Create provider with wallet
-    async fn create_provider(&self) -> Result<impl alloy::providers::Provider> {
+    async fn create_provider(
+        &self,
+    ) -> Result<impl alloy::providers::Provider<alloy::transports::http::Http<alloy::transports::http::Client>>> {
         let wallet = EthereumWallet::from(self.config.private_key.clone());
         let provider = ProviderBuilder::new()
+            .with_recommended_fillers()
             .wallet(wallet)
-            .connect_http(self.config.anvil_instance.endpoint_url().clone());
+            .on_http(self.config.anvil_instance.endpoint_url().clone());
 
         Ok(provider)
     }
