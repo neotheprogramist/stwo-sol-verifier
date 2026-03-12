@@ -20,7 +20,8 @@ tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 clap = { version = "4.0", features = ["derive"] }
-stwo.workspace = true
-stwo-constraint-framework.workspace = true
+stwo-prover.workspace = true
 stwo-polynomial.workspace = true
+# stwo-polynomial = { path = "/home/piotrstec/dev/stwo-polynomial" }
+# stwo-prover = { path = "/home/piotrstec/dev/stwo-fork-keccak/crates/prover" }
 num-traits.workspace = true

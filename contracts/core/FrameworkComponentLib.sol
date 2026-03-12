@@ -240,7 +240,7 @@ library FrameworkComponentLib {
         return samplePoints;
     }
 
-    function _getTraceStep(uint32 logSize) private pure returns (CirclePointM31.Point memory) {
+    function _getTraceStep(uint32 logSize) private view returns (CirclePointM31.Point memory) {
         CanonicCosetM31.CanonicCosetStruct memory canonicCosetM31 = CanonicCosetM31.newCanonicCoset(logSize);
         return CanonicCosetM31.step(canonicCosetM31);
     }
@@ -270,7 +270,7 @@ library FrameworkComponentLib {
             uint256 treeIdx = location.treeIndex;
 
             if (treeIdx < nTrees) {
-                samplePoints = _ensureTreeCapacity(samplePoints, treeIdx, location.colEnd);
+                samplePoints = _ensureTreeCapacity(samplePoints, treeIdx, location.size());
                 samplePoints = _processLocationColumns(state, point, traceStepM31, samplePoints, location, treeIdx);
             }
         }
@@ -304,7 +304,7 @@ library FrameworkComponentLib {
         uint256 numCols = location.size();
         
         for (uint256 colOffset = 0; colOffset < numCols; colOffset++) {
-            uint256 colIdx = location.colStart + colOffset;
+            uint256 colIdx = colOffset;
             if (colIdx < samplePoints.points[treeIdx].length) {
                 samplePoints = _processColumn(state, point, traceStepM31, samplePoints, treeIdx, colIdx);
             }

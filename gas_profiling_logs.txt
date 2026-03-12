@@ -1,0 +1,117 @@
+
+
+Starting STWO proof verification...
+[GAS PROFILING] Starting _verifyProof
+[GAS] _createSecurePoly: 19191
+[GAS] _initializeVerification: 342492
+[GAS PROFILING] Starting verification steps
+[GAS] _performCompositionCommit: 181608
+[GAS] getRandomPointFromState: 63918
+[GAS PROFILING] Starting _computeSamplePoints
+[GAS PROFILING] Total _computeSamplePoints: 599851
+[GAS] _computeSamplePoints: 601181
+[GAS] _performOodsVerification: 2423970
+[GAS PROFILING] Starting FRI verification
+[GAS] flattenCols: 34775
+[GAS] mixFelts: 54185
+[GAS] drawSecureFelt: 38705
+[GAS] calculateBounds: 25194
+[FRI GAS] Starting FriVerifier.commit
+[FRI INFO] Inner layers count: 3
+[FRI INFO] Column bounds count: 2
+[FRI GAS] Bounds validation: 434
+[FRI GAS] mixRoot first layer: 924
+[FRI GAS] Calculate domains: 369191
+[FRI GAS] drawSecureFelt first layer: 39183
+[FRI GAS] Create first layer verifier: 541
+[FRI GAS] halfOdds first layer: 89181
+[FRI GAS] Inner layers total: 146905
+[FRI GAS] Inner layers mix sum: 2967
+[FRI GAS] Inner layers draw secure felt sum: 118014
+[FRI GAS] mixFelts lastLayerPoly: 17139
+[FRI GAS] Create state: 2566
+[FRI GAS] Total FriVerifier.commit: 702115
+[GAS] FriVerifier.commit: 3363215
+[GAS] _verifyProofOfWork: 11824
+[GAS] mixU64: 4314
+[GAS PROFILING] Starting _verifyFri
+[GAS] sampleQueryPositions: 421756
+[GAS PROFILING] Starting _verifyMerkleDecommitments
+[INFO] Number of trees: 3
+[GAS] Processing tree: 0
+[GAS] Tree 0 verification: 302
+[GAS] Tree 0 total: 6982
+[GAS] Processing tree: 1
+[GAS] Tree 1 verification: 226808
+[GAS] Tree 1 total: 242562
+[GAS] Processing tree: 2
+[GAS] Tree 2 verification: 280538
+[GAS] Tree 2 total: 299269
+[GAS PROFILING] Total _verifyMerkleDecommitments: 564843
+[GAS] _verifyMerkleDecommitments: 566559
+[GAS] getNColumnsPerLogSize: 68420
+[GAS] columnLogSizes: 5709
+[FRI GAS] Starting friAnswers
+[FRI GAS] _flattenAndCreatePairs: 13181
+[FRI GAS] _sortByLogSizeAscending: 19196
+[FRI GAS] _getUniqueLogSizesFromFlattened: 3972
+[FRI INFO] Unique log sizes count: 2
+[FRI GAS] Processing logSize: 6
+[FRI GAS] friAnswersForLogSize for logSize 6 : 1256942
+[FRI GAS] Total for logSize 6 : 1270529
+[FRI GAS] Processing logSize: 5
+[FRI GAS] friAnswersForLogSize for logSize 5 : 1168111
+[FRI GAS] Total for logSize 5 : 1181588
+[FRI GAS] Total friAnswersForLogSize sum: 2425053
+[FRI GAS] Total friAnswers: 2506397
+[GAS] friAnswers: 2508260
+[FRI GAS] Starting decommitOnQueries
+[FRI INFO] Queries count: 3
+Gas used in _decodeDecommitment: 5573
+Gas used in MerkleVerifierProof.verify: 422157
+[FRI GAS] STEP 1 - decommitFirstLayer: 568162
+[FRI GAS] STEP 2 - foldQueries: 5567
+[FRI GAS] Starting decommitInnerLayers
+[FRI INFO] Inner layers: 3
+[FRI GAS] Layer 0
+[FRI GAS]   verifyAndFold - init witness: 504
+[FRI GAS]   verifyAndFold - computeDecommitment: 26286
+[FRI GAS]   verifyAndFold - extract M31 values: 12675
+[FRI GAS]   verifyAndFold - create tree & decode: 12981
+[FRI GAS]   verifyAndFold - MerkleVerifier.verify: 281871
+[FRI GAS]   verifyAndFold - foldQueries: 5740
+[FRI GAS]   verifyAndFold - foldLineSparseEvals: 546578
+[FRI GAS]   verifyAndFold - TOTAL: 904593
+[FRI GAS] Layer 0 done: 1793588
+[FRI GAS] Layer 1
+[FRI GAS]   verifyAndFold - init witness: 547
+[FRI GAS]   verifyAndFold - computeDecommitment: 27291
+[FRI GAS]   verifyAndFold - extract M31 values: 13207
+[FRI GAS]   verifyAndFold - create tree & decode: 12696
+[FRI GAS]   verifyAndFold - MerkleVerifier.verify: 236070
+[FRI GAS]   verifyAndFold - foldQueries: 5992
+[FRI GAS]   verifyAndFold - foldLineSparseEvals: 587234
+[FRI GAS]   verifyAndFold - TOTAL: 902604
+[FRI GAS] Layer 1 done: 1854560
+[FRI GAS] Layer 2
+[FRI GAS]   verifyAndFold - init witness: 565
+[FRI GAS]   verifyAndFold - computeDecommitment: 27621
+[FRI GAS]   verifyAndFold - extract M31 values: 13433
+[FRI GAS]   verifyAndFold - create tree & decode: 11941
+[FRI GAS]   verifyAndFold - MerkleVerifier.verify: 185714
+[FRI GAS]   verifyAndFold - foldQueries: 6099
+[FRI GAS]   verifyAndFold - foldLineSparseEvals: 595834
+[FRI GAS]   verifyAndFold - TOTAL: 861456
+[FRI GAS] Layer 2 done: 867074
+[FRI GAS] Total decommitInnerLayers: 4545920
+[FRI GAS] STEP 3 - decommitInnerLayers: 4548936
+[FRI GAS] STEP 4 - decommitLastLayer: 208235
+[FRI GAS] Total decommitOnQueries: 5344182
+[GAS] FriVerifier.decommit: 5436220
+[GAS PROFILING] Total _verifyFri: 9018655
+[GAS] _performFinalFriCheck: 9100409
+[GAS PROFILING] Total FRI verification: 12645484
+[GAS] _performFriVerification: 12648215
+[GAS PROFILING] Total verification steps: 15925893
+[GAS] _performVerificationSteps: 15928434
+[GAS PROFILING] Total _verifyProof: 16296961

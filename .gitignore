@@ -44,3 +44,5 @@ broadcast/
 
 # Soldeer
 /dependencies
+
+*.json

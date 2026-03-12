@@ -8,11 +8,13 @@ import "../cosets/CanonicCosetM31.sol";
 import "../cosets/CosetM31.sol";
 import "../circle/CirclePoint.sol";
 import "../circle/CirclePointM31.sol";
+import {console} from "forge-std/console.sol";
 import "../fields/QM31Field.sol";
 import "../fields/CM31Field.sol";
 import "../fields/M31Field.sol";
 import "../core/KeccakChannelLib.sol";
 import "../vcs/MerkleVerifier.sol";
+import "../core/ICosetCache.sol";
 
 /// @title FriVerifier
 /// @notice Library for FRI proximity proof verification
@@ -167,6 +169,15 @@ library FriVerifier {
         FriProof memory proof,
         CirclePolyDegreeBound.Bound[] memory columnBounds
     ) internal returns (FriVerifierState memory friVerifierState) {
+        // NOTE: gasStart here is AFTER function entry, so it doesn't include:
+        // - Function dispatch overhead (~10K)
+        // - Parameter copying overhead (~1.5M for large structs)
+        // - Storage access overhead (~800K for channelState reads)
+        uint256 gasStart = gasleft();
+        console.log("[FRI GAS] Starting FriVerifier.commit (internal measurement)");
+        console.log("[FRI INFO] Inner layers count:", proof.innerLayers.length);
+        console.log("[FRI INFO] Column bounds count:", columnBounds.length);
+        
         emit FriCommitmentStarted(proof.innerLayers.length + 1);
 
         // Validate inputs
@@ -174,6 +185,7 @@ library FriVerifier {
             revert EmptyColumnBounds();
         }
 
+        uint256 gasBeforeValidation = gasleft();
         // Verify column bounds are sorted in descending order
         for (uint256 i = 1; i < columnBounds.length; i++) {
             if (
@@ -183,12 +195,16 @@ library FriVerifier {
                 revert ColumnBoundsNotSorted();
             }
         }
+        console.log("[FRI GAS] Bounds validation:", gasBeforeValidation - gasleft());
 
         // Mix first layer commitment into channel
+        uint256 gasBeforeMix = gasleft();
         channelState.mixRoot(channelState.digest, proof.firstLayer.commitment);
+        console.log("[FRI GAS] mixRoot first layer:", gasBeforeMix - gasleft());
         emit FriLayerCommitted(0, proof.firstLayer.commitment);
 
         // Calculate column commitment domains
+        uint256 gasBeforeDomains = gasleft();
         CircleDomain.CircleDomainStruct[]
             memory columnCommitmentDomains = new CircleDomain.CircleDomainStruct[](
                 columnBounds.length
@@ -208,15 +224,21 @@ library FriVerifier {
                 halfCoset
             );
         }
+        console.log("[FRI GAS] Calculate domains:", gasBeforeDomains - gasleft());
 
         // Create first layer verifier
+        uint256 gasBeforeDraw = gasleft();
+        QM31Field.QM31 memory foldingAlpha = channelState.drawSecureFelt();
+        console.log("[FRI GAS] drawSecureFelt first layer:", gasBeforeDraw - gasleft());
+        
+        uint256 gasBeforeFirstLayer = gasleft();
         FriFirstLayerVerifier memory firstLayer = FriFirstLayerVerifier({
             columnBounds: columnBounds,
             columnCommitmentDomains: columnCommitmentDomains,
-            foldingAlpha: channelState.drawSecureFelt(),
+            foldingAlpha: foldingAlpha,
             proof: proof.firstLayer
         });
-
+        console.log("[FRI GAS] Create first layer verifier:", gasBeforeFirstLayer - gasleft());
         // Process inner layers
         FriInnerLayerVerifier[]
             memory innerLayers = new FriInnerLayerVerifier[](
@@ -229,24 +251,32 @@ library FriVerifier {
         uint32 layerDomainLogSize = layerBound + config.logBlowupFactor;
         
   
-        
+        uint256 gasBeforeHalfOdds = gasleft();
         CosetM31.CosetStruct memory layerDomain = CosetM31.halfOdds(layerDomainLogSize);
-        
- 
+        console.log("[FRI GAS] halfOdds first layer:", gasBeforeHalfOdds - gasleft());
+        uint256 gasBeforeInnerLayers = gasleft();
+        uint256 totalMixGas = 0;
+        uint256 totalDrawGas = 0;
 
         for (uint256 i = 0; i < proof.innerLayers.length; i++) {
             // Mix layer commitment into channel
+            uint256 gasBeforeLayerMix = gasleft();
             channelState.mixRoot(
                 channelState.digest,
                 proof.innerLayers[i].commitment
             );
+            totalMixGas += (gasBeforeLayerMix - gasleft());
             emit FriLayerCommitted(i + 1, proof.innerLayers[i].commitment);
 
             // Create inner layer verifier
+            uint256 gasBeforeLayerDraw = gasleft();
+            QM31Field.QM31 memory layerFoldingAlpha = channelState.drawSecureFelt();
+            totalDrawGas += (gasBeforeLayerDraw - gasleft());
+            
             innerLayers[i] = FriInnerLayerVerifier({
                 degreeBound: layerBound,
                 domain: layerDomain,
-                foldingAlpha: channelState.drawSecureFelt(),
+                foldingAlpha: layerFoldingAlpha,
                 layerIndex: i,
                 proof: proof.innerLayers[i]
             });
@@ -261,6 +291,9 @@ library FriVerifier {
             layerDomain = CosetM31.double(layerDomain);
   
         }
+        console.log("[FRI GAS] Inner layers total:", gasBeforeInnerLayers - gasleft());
+        console.log("[FRI GAS] Inner layers mix sum:", totalMixGas);
+        console.log("[FRI GAS] Inner layers draw secure felt sum:", totalDrawGas);
 
         // Verify final layer bound matches config
         if (layerBound != config.logLastLayerDegreeBound) {
@@ -273,9 +306,12 @@ library FriVerifier {
             revert LastLayerDegreeInvalid();
         }
         
+        uint256 gasBeforeMixFelts = gasleft();
         channelState.mixFelts(proof.lastLayerPoly);
+        console.log("[FRI GAS] mixFelts lastLayerPoly:", gasBeforeMixFelts - gasleft());
 
         // Initialize verifier state
+        uint256 gasBeforeState = gasleft();
         friVerifierState = FriVerifierState({
             config: config,
             firstLayer: firstLayer,
@@ -290,8 +326,10 @@ library FriVerifier {
             }),
             queriesSampled: false
         });
+        console.log("[FRI GAS] Create state:", gasBeforeState - gasleft());
 
         emit FriCommitmentCompleted(true);
+        console.log("[FRI GAS] Total FriVerifier.commit:", gasStart - gasleft());
     }
 
     /// @notice Sample query positions for FRI decommitment
@@ -700,19 +738,28 @@ library FriVerifier {
         QueryPositionsByLogSize memory queryPositionsByLogSize, // &BTreeMap<u32, Vec<usize>>
         uint32[][] memory queriedValues, // TreeVec<Vec<BaseField>> (BaseField = M31 = uint32)
         uint32[][][] memory nColumnsPerLogSize // TreeVec<&BTreeMap<u32, usize>>
-    ) internal pure returns (QM31Field.QM31[][] memory result) {
+    ) internal view returns (QM31Field.QM31[][] memory result) {
+        uint256 gasStart = gasleft();
+        console.log("[FRI GAS] Starting friAnswers");
 
         // Flatten column log sizes and create (logSize, samples) pairs
+        uint256 gasBeforeFlatten = gasleft();
         LogSizeAndSamples[] memory flattenedData = _flattenAndCreatePairs(
             columnLogSizes,
             samples
         );
+        console.log("[FRI GAS] _flattenAndCreatePairs:", gasBeforeFlatten - gasleft());
 
         // Sort by log size in DESCENDING order (matches Rust: sorted_by_key(|(log_size, ..)| Reverse(*log_size)))
+        uint256 gasBeforeSort = gasleft();
         _sortByLogSizeAscending(flattenedData);
+        console.log("[FRI GAS] _sortByLogSizeAscending:", gasBeforeSort - gasleft());
         
         // Get unique log sizes from flattened data in descending order
+        uint256 gasBeforeUnique = gasleft();
         uint32[] memory uniqueLogSizes = _getUniqueLogSizesFromFlattened(flattenedData);
+        console.log("[FRI GAS] _getUniqueLogSizesFromFlattened:", gasBeforeUnique - gasleft());
+        console.log("[FRI INFO] Unique log sizes count:", uniqueLogSizes.length);
 
         
         result = new QM31Field.QM31[][](uniqueLogSizes.length);
@@ -724,8 +771,11 @@ library FriVerifier {
         });
 
         // Process each unique log size (already in descending order from sorting)
+        uint256 totalAnswersForLogSizeGas = 0;
         for (uint256 i = 0; i < uniqueLogSizes.length; i++) {
+            uint256 gasBeforeLogSize = gasleft();
             uint32 logSize = uniqueLogSizes[i];
+            console.log("[FRI GAS] Processing logSize:", logSize);
             
             // Find this logSize in queryPositionsByLogSize
             uint256[] memory queryPositions;
@@ -751,6 +801,7 @@ library FriVerifier {
             // Calculate answers for this log size
             // In Rust: fri_answers_for_log_size returns Result<Vec<SecureField>, VerificationError>
             // This becomes one column in our 2D array
+            uint256 gasBeforeAnswersForLogSize = gasleft();
             QM31Field.QM31[] memory answersForLogSize = friAnswersForLogSize(
                 logSize,
                 samplesForLogSize,
@@ -759,14 +810,18 @@ library FriVerifier {
                 queriedValuesIter,
                 nColumnsForLogSize
             );
+            uint256 answersForLogSizeGas = gasBeforeAnswersForLogSize - gasleft();
+            totalAnswersForLogSizeGas += answersForLogSizeGas;
+            console.log("[FRI GAS] friAnswersForLogSize for logSize", logSize, ":", answersForLogSizeGas);
 
             // Store this group's answers as one column
             result[i] = answersForLogSize;
-      
+            console.log("[FRI GAS] Total for logSize", logSize, ":", gasBeforeLogSize - gasleft());
 
         }
 
-
+        console.log("[FRI GAS] Total friAnswersForLogSize sum:", totalAnswersForLogSizeGas);
+        console.log("[FRI GAS] Total friAnswers:", gasStart - gasleft());
     }
 
     /// @notice Calculate FRI answers for a specific log size
@@ -785,49 +840,69 @@ library FriVerifier {
         uint256[] memory queryPositions,
         QueriedValuesIterator memory queriedValuesIter,
         uint256[] memory nColumns
-    ) internal pure returns (QM31Field.QM31[] memory answersForLogSize) {
-        // Create sample batches (equivalent to ColumnSampleBatch::new_vec)
-        ColumnSampleBatch[] memory sampleBatches = _createColumnSampleBatches(
-            samples
-        );
+    ) internal view returns (QM31Field.QM31[] memory answersForLogSize) {
+        uint256 gasStart = gasleft();
+        console.log("[FRI GAS]   === friAnswersForLogSize START ===");
+        console.log("[FRI GAS]   logSize:", logSize);
+        
+        // Create sample batches
+        uint256 gasCheckpoint = gasleft();
+        ColumnSampleBatch[] memory sampleBatches = _createColumnSampleBatches(samples);
+        console.log("[FRI GAS]   _createColumnSampleBatches:", gasCheckpoint - gasleft());
+        
         // Calculate quotient constants
-        QuotientConstants
-            memory quotientConstants = _calculateQuotientConstants(
-                sampleBatches,
-                randomCoeff
-            );
+        gasCheckpoint = gasleft();
+        QuotientConstants memory quotientConstants = _calculateQuotientConstants(sampleBatches, randomCoeff);
+        console.log("[FRI GAS]   _calculateQuotientConstants:", gasCheckpoint - gasleft());
+        
         // Create commitment domain
-        CircleDomain.CircleDomainStruct
-            memory commitmentDomain = _createCommitmentDomain(logSize);
+        gasCheckpoint = gasleft();
+        CircleDomain.CircleDomainStruct memory commitmentDomain = _createCommitmentDomain(logSize);
+        console.log("[FRI GAS]   _createCommitmentDomain:", gasCheckpoint - gasleft());
 
-        // Calculate quotient evaluations at each query position
+        // Allocate result array
+        gasCheckpoint = gasleft();
         answersForLogSize = new QM31Field.QM31[](queryPositions.length);
+        console.log("[FRI GAS]   Array allocation:", gasCheckpoint - gasleft());
 
+        // Process queries
+        uint256 loopStart = gasleft();
         for (uint256 i = 0; i < queryPositions.length; i++) {
             uint256 queryPosition = queryPositions[i];
 
-            // Get domain point at bit-reversed query position
+            uint256 gasBeforeDomain = gasleft();
             CirclePointM31.Point memory domainPoint = _getDomainPointAtQuery(
                 commitmentDomain,
                 queryPosition,
                 logSize
             );
+            uint256 domainCost = gasBeforeDomain - gasleft();
 
-            // Get queried values at this row
+            uint256 gasBeforeQueried = gasleft();
             uint32[] memory queriedValuesAtRow = _getQueriedValuesAtRow(
                 queriedValuesIter,
                 nColumns
             );
+            uint256 queriedCost = gasBeforeQueried - gasleft();
 
-            // Accumulate row quotients
+            uint256 gasBeforeAccumulate = gasleft();
             answersForLogSize[i] = _accumulateRowQuotients(
                 sampleBatches,
                 queriedValuesAtRow,
                 quotientConstants,
                 domainPoint
             );
+            uint256 accumulateCost = gasBeforeAccumulate - gasleft();
+            
+            if (i == 0) {
+                console.log("[FRI GAS]   Query 0 breakdown:");
+                console.log("[FRI GAS]     _getDomainPointAtQuery:", domainCost);
+                console.log("[FRI GAS]     _getQueriedValuesAtRow:", queriedCost);
+                console.log("[FRI GAS]     _accumulateRowQuotients:", accumulateCost);
+            }
         }
-
+        console.log("[FRI GAS]   Loop total (", queryPositions.length, "queries):", loopStart - gasleft());
+        console.log("[FRI GAS]   === friAnswersForLogSize TOTAL:", gasStart - gasleft());
     }
 
     /// @notice Accumulate quotient contributions from all sample batches at a domain point
@@ -842,18 +917,22 @@ library FriVerifier {
         uint32[] memory queriedValuesAtRow,
         QuotientConstants memory quotientConstants,
         CirclePointM31.Point memory domainPoint
-    ) internal pure returns (QM31Field.QM31 memory accumulator) {
-
+    ) internal view returns (QM31Field.QM31 memory accumulator) {
+        uint256 gasStart = gasleft();
         
         // Calculate denominator inverses for all sample batches
+        uint256 gasBeforeDenom = gasleft();
         CM31Field.CM31[]
             memory denominatorInverses = _calculateDenominatorInverses(
                 sampleBatches,
                 domainPoint
             );
+        console.log("[FRI DEBUG]     _calculateDenominatorInverses:", gasBeforeDenom - gasleft());
 
         accumulator = QM31Field.zero();
 
+        uint256 gasBeforeLoops = gasleft();
+        
         // Process each sample batch
         for (
             uint256 batchIdx = 0;
@@ -868,6 +947,7 @@ library FriVerifier {
             ];
 
             QM31Field.QM31 memory numerator = QM31Field.zero();
+                    console.log("sampleBatch.columnsAndValues.length:", sampleBatch.columnsAndValues.length);
 
             // Process each column in the batch
             for (
@@ -892,8 +972,6 @@ library FriVerifier {
                     lineCoeffs[2] // c coefficient
                 );
 
-
-
                 // Calculate linear term: a * domain_point.y + b
                 QM31Field.QM31 memory linearTerm = QM31Field.add(
                     QM31Field.mul(
@@ -917,6 +995,9 @@ library FriVerifier {
             );
             accumulator = QM31Field.add(accumulator, contribution);
         }
+        console.log("sampleBatches.length:", sampleBatches.length);
+        console.log("[FRI DEBUG]     Loops (all batches+columns):", gasBeforeLoops - gasleft());
+        console.log("[FRI DEBUG]     Total _accumulateRowQuotients:", gasStart - gasleft());
     }
 
     // Helper data structures for fri_answers implementation
@@ -1217,11 +1298,18 @@ library FriVerifier {
     function _calculateQuotientConstants(
         ColumnSampleBatch[] memory sampleBatches,
         QM31Field.QM31 memory randomCoeff
-    ) private pure returns (QuotientConstants memory constants) {
+    ) private view returns (QuotientConstants memory constants) {
+        uint256 gasStart = gasleft();
+        
         // Calculate line coefficients for each batch and column
+        uint256 gasBeforeAlloc = gasleft();
         constants.lineCoeffs = new QM31Field.QM31[][][](sampleBatches.length);
         QM31Field.QM31 memory alpha = QM31Field.one();
+        console.log("[FRI DEBUG]     Array alloc in calculateQuotientConstants:", gasBeforeAlloc - gasleft());
 
+        uint256 totalLineCoeffsGas = 0;
+        uint256 totalMulGas = 0;
+        
         for (
             uint256 batchIdx = 0;
             batchIdx < sampleBatches.length;
@@ -1242,24 +1330,43 @@ library FriVerifier {
                     value: batch.columnsAndValues[colIdx].value
                 });
 
+                uint256 gasBeforeLineCoeffs = gasleft();
                 constants.lineCoeffs[batchIdx][
                     colIdx
                 ] = _complexConjugateLineCoeffs(sample, alpha);
+                totalLineCoeffsGas += gasBeforeLineCoeffs - gasleft();
+                
+                uint256 gasBeforeMul = gasleft();
                 alpha = QM31Field.mul(alpha, randomCoeff);
+                totalMulGas += gasBeforeMul - gasleft();
             }
         }
+        
+        console.log("[FRI DEBUG]     Total _complexConjugateLineCoeffs:", totalLineCoeffsGas);
+        console.log("[FRI DEBUG]     Total QM31.mul:", totalMulGas);
+        console.log("[FRI DEBUG]     Total _calculateQuotientConstants:", gasStart - gasleft());
     }
 
     function _createCommitmentDomain(
         uint32 logSize
-    ) private pure returns (CircleDomain.CircleDomainStruct memory domain) {
+    ) private view returns (CircleDomain.CircleDomainStruct memory domain) {
+        uint256 gasStart = gasleft();
+        
+        uint256 gasBeforeCanonic = gasleft();
         CanonicCosetM31.CanonicCosetStruct memory canonicCoset = CanonicCosetM31
             .newCanonicCoset(logSize);
+        console.log("[FRI DEBUG]     newCanonicCoset:", gasBeforeCanonic - gasleft());
+        
+        uint256 gasBeforeHalf = gasleft();
         CosetM31.CosetStruct memory halfCoset = CanonicCosetM31.halfCoset(
             canonicCoset
         );
+        console.log("[FRI DEBUG]     halfCoset:", gasBeforeHalf - gasleft());
 
+        uint256 gasBeforeNew = gasleft();
         domain = CircleDomain.newCircleDomain(halfCoset);
+        console.log("[FRI DEBUG]     newCircleDomain:", gasBeforeNew - gasleft());
+        console.log("[FRI DEBUG]     Total _createCommitmentDomain:", gasStart - gasleft());
     }
 
     function _getDomainPointAtQuery(
@@ -1335,26 +1442,74 @@ library FriVerifier {
     function _complexConjugateLineCoeffs(
         PointSample memory sample,
         QM31Field.QM31 memory alpha
-    ) private pure returns (QM31Field.QM31[] memory coeffs) {
+    ) private view returns (QM31Field.QM31[] memory coeffs) {
+        uint256 gasStart = gasleft();
+        
+        uint256 gasBeforeAlloc = gasleft();
         coeffs = new QM31Field.QM31[](3);
+        uint256 allocGas = gasBeforeAlloc - gasleft();
+        
+        uint256 gasBeforeConj = gasleft();
         QM31Field.QM31 memory valueConj = _conjugateQM31(sample.value);
+        uint256 conjGas = gasBeforeConj - gasleft();
+        
+        uint256 gasBeforeSub1 = gasleft();
         QM31Field.QM31 memory a = QM31Field.sub(valueConj, sample.value);
+        uint256 sub1Gas = gasBeforeSub1 - gasleft();
     
         // Calculate c = point.conjugate().y - point.y
+        uint256 gasBeforePointConj = gasleft();
         CirclePoint.Point memory pointConj = CirclePoint.complexConjugate(sample.point);
+        uint256 pointConjGas = gasBeforePointConj - gasleft();
         
+        uint256 gasBeforeSub2 = gasleft();
         QM31Field.QM31 memory c = QM31Field.sub(pointConj.y, sample.point.y);
+        uint256 sub2Gas = gasBeforeSub2 - gasleft();
         
         // Calculate b = value * c - a * point.y
+        uint256 gasBeforeMul1 = gasleft();
         QM31Field.QM31 memory valueMulC = QM31Field.mul(sample.value, c);
+        uint256 mul1Gas = gasBeforeMul1 - gasleft();
+        
+        uint256 gasBeforeMul2 = gasleft();
         QM31Field.QM31 memory aMulY = QM31Field.mul(a, sample.point.y);
+        uint256 mul2Gas = gasBeforeMul2 - gasleft();
+        
+        uint256 gasBeforeSub3 = gasleft();
         QM31Field.QM31 memory b = QM31Field.sub(valueMulC, aMulY);
-
+        uint256 sub3Gas = gasBeforeSub3 - gasleft();
 
         // Return (alpha * a, alpha * b, alpha * c)
+        uint256 gasBeforeMul3 = gasleft();
         coeffs[0] = QM31Field.mul(alpha, a);
+        uint256 mul3Gas = gasBeforeMul3 - gasleft();
+        
+        uint256 gasBeforeMul4 = gasleft();
         coeffs[1] = QM31Field.mul(alpha, b);
+        uint256 mul4Gas = gasBeforeMul4 - gasleft();
+        
+        uint256 gasBeforeMul5 = gasleft();
         coeffs[2] = QM31Field.mul(alpha, c);
+        uint256 mul5Gas = gasBeforeMul5 - gasleft();
+        
+        uint256 totalGas = gasStart - gasleft();
+        
+        // Only log first call to avoid spam
+        if (gasStart > 4950000000) {
+            console.log("[FRI TRACE] _complexConjugateLineCoeffs breakdown:");
+            console.log("  Array alloc:", allocGas);
+            console.log("  _conjugateQM31:", conjGas);
+            console.log("  QM31.sub (valueConj-value):", sub1Gas);
+            console.log("  CirclePoint.complexConjugate:", pointConjGas);
+            console.log("  QM31.sub (pointConj.y-point.y):", sub2Gas);
+            console.log("  QM31.mul (value*c):", mul1Gas);
+            console.log("  QM31.mul (a*point.y):", mul2Gas);
+            console.log("  QM31.sub (valueMulC-aMulY):", sub3Gas);
+            console.log("  QM31.mul (alpha*a):", mul3Gas);
+            console.log("  QM31.mul (alpha*b):", mul4Gas);
+            console.log("  QM31.mul (alpha*c):", mul5Gas);
+            console.log("  TOTAL:", totalGas);
+        }
     }
     
     /// @notice Complex conjugate for QM31 (negates second component)
@@ -1390,8 +1545,9 @@ library FriVerifier {
     /// @return success True if decommitment verification passes
     function decommit(
         FriVerifierState memory friVerifierState,
-        QM31Field.QM31[][] memory firstLayerQueryEvals
-    ) internal pure returns (bool success) {
+        QM31Field.QM31[][] memory firstLayerQueryEvals,
+        ICosetCache cacheProvider
+    ) internal returns (bool success) {
         // Ensure queries were sampled
         if (!friVerifierState.queriesSampled) {
             revert("Queries not sampled");
@@ -1401,7 +1557,8 @@ library FriVerifier {
             decommitOnQueries(
                 friVerifierState,
                 friVerifierState.queries,
-                firstLayerQueryEvals
+                firstLayerQueryEvals,
+                cacheProvider
             );
     }
 
@@ -1414,14 +1571,20 @@ library FriVerifier {
     function decommitOnQueries(
         FriVerifierState memory friVerifierState,
         Queries memory queries,
-        QM31Field.QM31[][] memory firstLayerQueryEvals
-    ) internal pure returns (bool success) {
+        QM31Field.QM31[][] memory firstLayerQueryEvals,
+        ICosetCache cacheProvider
+    ) internal returns (bool success) {
+        uint256 gasStart = gasleft();
+        console.log("[FRI GAS] Starting decommitOnQueries");
+        console.log("[FRI INFO] Queries count:", queries.positions.length);
 
         // Step 1: Verify first layer and get sparse evaluations
+        uint256 gasBeforeFirstLayer = gasleft();
         (
             bool firstLayerSuccess,
             SparseEvaluation[] memory firstLayerSparseEvals
         ) = decommitFirstLayer(friVerifierState, queries, firstLayerQueryEvals);
+        console.log("[FRI GAS] STEP 1 - decommitFirstLayer:", gasBeforeFirstLayer - gasleft());
         if (!firstLayerSuccess) {
             revert(
                 "FRI decommit failed at STEP 1: First layer verification failed"
@@ -1429,12 +1592,15 @@ library FriVerifier {
         }
 
         // Step 2: Fold queries for inner layers (equivalent to queries.fold(CIRCLE_TO_LINE_FOLD_STEP))
+        uint256 gasBeforeFold = gasleft();
         Queries memory innerLayerQueries = foldQueries(
             queries,
             CIRCLE_TO_LINE_FOLD_STEP
         );
+        console.log("[FRI GAS] STEP 2 - foldQueries:", gasBeforeFold - gasleft());
 
         // Step 3: Verify inner layers
+        uint256 gasBeforeInnerLayers = gasleft();
         (
             bool innerLayersSuccess,
             Queries memory lastLayerQueries,
@@ -1442,8 +1608,10 @@ library FriVerifier {
         ) = decommitInnerLayers(
                 friVerifierState,
                 innerLayerQueries,
-                firstLayerSparseEvals
+                firstLayerSparseEvals,
+                cacheProvider
             );
+        console.log("[FRI GAS] STEP 3 - decommitInnerLayers:", gasBeforeInnerLayers - gasleft());
         if (!innerLayersSuccess) {
             revert("FRI decommit failed at STEP 3: Inner layers verification failed");
         }
@@ -1451,11 +1619,14 @@ library FriVerifier {
         
 
         // Step 4: Verify last layer
+        uint256 gasBeforeLastLayer = gasleft();
         bool lastLayerSuccess = decommitLastLayer(friVerifierState, lastLayerQueries, lastLayerQueryEvals);
+        console.log("[FRI GAS] STEP 4 - decommitLastLayer:", gasBeforeLastLayer - gasleft());
         if (!lastLayerSuccess) {
             revert("FRI decommit failed at STEP 4: Last layer verification failed");
         }
 
+        console.log("[FRI GAS] Total decommitOnQueries:", gasStart - gasleft());
         return true;
     }
 
@@ -1472,7 +1643,7 @@ library FriVerifier {
         QM31Field.QM31[][] memory firstLayerQueryEvals
     )
         internal
-        pure
+        view
         returns (bool success, SparseEvaluation[] memory sparseEvalsResult)
     {
         // Verify first layer using the first layer verifier
@@ -1496,7 +1667,7 @@ library FriVerifier {
         QM31Field.QM31[][] memory firstLayerQueryEvals
     )
         internal
-        pure
+        view
         returns (bool success, SparseEvaluation[] memory sparseEvalsResult)
     {
         _validateFirstLayerInputs(firstLayer, queries, firstLayerQueryEvals);
@@ -1509,7 +1680,7 @@ library FriVerifier {
         QM31Field.QM31[][] memory firstLayerQueryEvals
     )
         private
-        pure
+        view
         returns (bool success, SparseEvaluation[] memory sparseEvalsResult)
     {
         WitnessIterator memory witnessIter = WitnessIterator({
@@ -1519,7 +1690,7 @@ library FriVerifier {
 
         sparseEvalsResult = new SparseEvaluation[](firstLayer.columnBounds.length);
         QM31Field.QM31[][] memory sparseEvals = new QM31Field.QM31[][](firstLayer.columnBounds.length);
-
+        uint256 gasBeforeProcessColumns = gasleft();
         (
             uint256 numUniqueLogSizes,
             uint256 totalDecommittedM31Values,
@@ -1528,12 +1699,15 @@ library FriVerifier {
         ) = _processColumnsLoop(
             firstLayer, queries, firstLayerQueryEvals, witnessIter, sparseEvalsResult, sparseEvals
         );
+        console.log("[FRI GAS] _processColumnsLoop:", gasBeforeProcessColumns - gasleft());
 
         require(witnessIter.index == witnessIter.witness.length, "Not all witness consumed");
-
+        
+        uint256 gasBeforeMerkle = gasleft();
         _verifyMerkleProof(
             firstLayer, sparseEvals, totalDecommittedM31Values, numUniqueLogSizes, uniqueLogSizes, decommitmentsByLogSize
         );
+        console.log("[FRI GAS] _verifyMerkleProof first layer:", gasBeforeMerkle - gasleft());
 
         return (true, sparseEvalsResult);
     }
@@ -1592,7 +1766,7 @@ library FriVerifier {
         uint256 numUniqueLogSizes,
         uint32[] memory uniqueLogSizes,
         uint256[][] memory decommitmentsByLogSize
-    ) private pure {
+    ) private view {
         uint32[] memory decommittedValues = _extractDecommittedValues(sparseEvals, totalDecommittedM31Values);
         _verifyMerkleProofFinal(firstLayer, decommittedValues, numUniqueLogSizes, uniqueLogSizes, decommitmentsByLogSize);
     }
@@ -1603,15 +1777,16 @@ library FriVerifier {
         uint256 numUniqueLogSizes,
         uint32[] memory uniqueLogSizes,
         uint256[][] memory decommitmentsByLogSize
-    ) private pure {
+    ) private view {
         uint32[] memory columnLogSizes = _createColumnLogSizes(firstLayer);
         
         MerkleVerifier.MerkleTree memory verifier = MerkleVerifier.createMerkleTree(
             firstLayer.proof.commitment, columnLogSizes
         );
 
+        uint256 gasBeforeDecode = gasleft();
         MerkleVerifier.Decommitment memory decommitment = _decodeDecommitment(firstLayer.proof.decommitment);
-        
+        console.log("Gas used in _decodeDecommitment:", gasBeforeDecode - gasleft());
         // Prepare queries per log size from decommitment positions
         MerkleVerifier.QueriesPerLogSize[] memory queriesPerLogSize = new MerkleVerifier.QueriesPerLogSize[](numUniqueLogSizes);
         for (uint256 i = 0; i < numUniqueLogSizes; i++) {
@@ -1623,8 +1798,9 @@ library FriVerifier {
         
         // Sort queriesPerLogSize by logSize in ascending order to match Rust behavior
         _sortQueriesPerLogSizeAscending(queriesPerLogSize);
-        
+        uint256 gasBeforeVerify = gasleft();
         MerkleVerifier.verify(verifier, queriesPerLogSize, decommittedValues, decommitment);
+        console.log("Gas used in MerkleVerifierProof.verify:", gasBeforeVerify - gasleft());
     }
 
     /// @notice Flatten sparse evaluation to 1D array
@@ -1664,16 +1840,20 @@ library FriVerifier {
     function decommitInnerLayers(
         FriVerifierState memory friVerifierState,
         Queries memory queries,
-        SparseEvaluation[] memory firstLayerSparseEvals
+        SparseEvaluation[] memory firstLayerSparseEvals,
+        ICosetCache cacheProvider
     )
         internal
-        pure
         returns (
             bool success,
             Queries memory lastLayerQueries,
             QM31Field.QM31[] memory lastLayerQueryEvals
         )
     {
+        uint256 gasStart = gasleft();
+        console.log("[FRI GAS] Starting decommitInnerLayers");
+        console.log("[FRI INFO] Inner layers:", friVerifierState.innerLayers.length);
+        
         Queries memory layerQueries = queries;
         QM31Field.QM31[] memory layerQueryEvals = new QM31Field.QM31[](
             layerQueries.positions.length
@@ -1696,10 +1876,13 @@ library FriVerifier {
             layerIndex < friVerifierState.innerLayers.length;
             layerIndex++
         ) {
+            uint256 gasBeforeLayer = gasleft();
+            console.log("[FRI GAS] Layer", layerIndex);
+            
             FriInnerLayerVerifier memory layer = friVerifierState.innerLayers[
                 layerIndex
             ];
-
+            
             // Check for evals committed in the first layer that need to be folded into this layer
             while (
                 columnBoundIndex <
@@ -1723,12 +1906,12 @@ library FriVerifier {
                         .firstLayer
                         .columnCommitmentDomains[columnBoundIndex];
 
-
                 QM31Field.QM31[]
                     memory foldedColumnEvals = foldCircleSparseEvals(
                         firstLayerSparseEvals[sparseEvalsIndex],
                         previousFoldingAlpha,
-                        columnDomain
+                        columnDomain,
+                        cacheProvider
                     );
 
                 // Update layerQueryEvals with accumulated values
@@ -1747,7 +1930,7 @@ library FriVerifier {
                 bool layerSuccess,
                 Queries memory newLayerQueries,
                 QM31Field.QM31[] memory newLayerQueryEvals
-            ) = verifyAndFoldLayer(layer, layerQueries, layerQueryEvals);
+            ) = verifyAndFoldLayer(layer, layerQueries, layerQueryEvals, cacheProvider);
 
             if (!layerSuccess) {
                 return (false, layerQueries, layerQueryEvals);
@@ -1756,6 +1939,8 @@ library FriVerifier {
             layerQueries = newLayerQueries;
             layerQueryEvals = newLayerQueryEvals;
             previousFoldingAlpha = layer.foldingAlpha;
+            
+            console.log("[FRI GAS] Layer", layerIndex, "done:", gasBeforeLayer - gasleft());
         }
 
         // Ensure all values have been consumed
@@ -1769,6 +1954,7 @@ library FriVerifier {
             "Not all sparse evals consumed"
         );
 
+        console.log("[FRI GAS] Total decommitInnerLayers:", gasStart - gasleft());
         return (true, layerQueries, layerQueryEvals);
     }
 
@@ -1810,11 +1996,9 @@ library FriVerifier {
             CirclePointM31.Point memory circlePoint = CosetM31.at(domain, reversedIndex);
             uint32 x = circlePoint.x; // Extract x-coordinate (M31)
 
-            // Convert M31 to QM31 (matches Rust x.into())
             QM31Field.QM31 memory xAsQM31 = QM31Field.fromM31(x, 0, 0, 0);
 
-            // Evaluate polynomial at point x
-            // Rust: if query_eval != last_layer_poly.eval_at_point(x.into())
+
             QM31Field.QM31 memory expectedEval = evaluatePolynomialAtPoint(
                 lastLayerPoly,
                 xAsQM31
@@ -1822,7 +2006,7 @@ library FriVerifier {
 
             // Compare with provided evaluation
             if (!QM31Field.eq(queryEval, expectedEval)) {
-                return false; // LastLayerEvaluationsInvalid
+                return false; 
             }
         }
         
@@ -1868,9 +2052,11 @@ library FriVerifier {
     function foldCircleSparseEvals(
         SparseEvaluation memory sparseEval,
         QM31Field.QM31 memory foldingAlpha,
-        CircleDomain.CircleDomainStruct memory columnDomain
-    ) internal pure returns (QM31Field.QM31[] memory foldedEvals) {
-        
+        CircleDomain.CircleDomainStruct memory columnDomain,
+        ICosetCache cacheProvider
+    ) internal returns (QM31Field.QM31[] memory foldedEvals) {
+        uint256 gasStart = gasleft();
+        console.log("[FRI GAS] Starting foldCircleSparseEvals");
         // Result has one value per subset (matches Rust: .map().collect())
         foldedEvals = new QM31Field.QM31[](sparseEval.subsetEvals.length);
 
@@ -1905,8 +2091,7 @@ library FriVerifier {
             // Rust: CircleDomain::new(Coset::new(fold_domain_initial, CIRCLE_TO_LINE_FOLD_STEP - 1))
             // Since CIRCLE_TO_LINE_FOLD_STEP = 1, log_size = 0, which means single point domain
             // For log_size = 0, step_size = subgroup_gen(0) = identity index (0)
-       
-            CosetM31.CosetStruct memory foldDomainCoset = CosetM31.newCoset(
+            CosetM31.CosetStruct memory foldDomainCoset = cacheProvider.getCachedCoset(
                 foldDomainInitial,
                 0 
             );
@@ -1921,6 +2106,7 @@ library FriVerifier {
 
         
         }
+        console.log("[FRI GAS] Total foldCircleSparseEvals:", gasStart - gasleft());
     }
 
     /// @notice Helper to fold a single subset's circle evaluations into line
@@ -1934,8 +2120,9 @@ library FriVerifier {
         QM31Field.QM31[] memory src,
         CircleDomain.CircleDomainStruct memory srcDomain,
         QM31Field.QM31 memory alpha
-    ) internal pure returns (QM31Field.QM31 memory) {
-
+    ) internal view returns (QM31Field.QM31 memory) {
+        uint256 gasStart = gasleft();
+        console.log("[FRI GAS] Starting _foldCircleIntoLineForSubset");
         // Rust: assert_eq!(src.len() >> CIRCLE_TO_LINE_FOLD_STEP, dst.len());
         require(
             src.length >> CIRCLE_TO_LINE_FOLD_STEP == dst.length,
@@ -1983,6 +2170,7 @@ library FriVerifier {
             
 
         }
+        console.log("[FRI GAS] Total _foldCircleIntoLineForSubset:", gasStart - gasleft());
         return dst[0]; // Since dst size is 1, return the single folded evaluation
     }
     
@@ -2015,8 +2203,8 @@ library FriVerifier {
         QM31Field.QM31[] memory layerQueryEvals,
         QM31Field.QM31[] memory foldedColumnEvals,
         QM31Field.QM31 memory foldingAlpha
-    ) internal pure returns (QM31Field.QM31[] memory) {
-
+    ) internal view returns (QM31Field.QM31[] memory) {
+        uint256 gasStart = gasleft();
         require(
             layerQueryEvals.length == foldedColumnEvals.length,
             "Array length mismatch"
@@ -2038,7 +2226,7 @@ library FriVerifier {
             );
         
         }
-        
+        console.log("[FRI GAS] accumulateLine:", gasStart - gasleft());
         return layerQueryEvals;
     }
 
@@ -2047,53 +2235,88 @@ library FriVerifier {
     /// @param sparseEval Sparse evaluation structure to fold
     /// @param foldingAlpha Folding coefficient
     /// @param sourceDomain Source line domain (coset)
+    /// @param cacheProvider Coset cache provider
     /// @return foldedEvals Folded evaluations (one per subset)
     function foldLineSparseEvals(
         SparseEvaluation memory sparseEval,
         QM31Field.QM31 memory foldingAlpha,
-        CosetM31.CosetStruct memory sourceDomain
-    ) internal pure returns (QM31Field.QM31[] memory foldedEvals) {
-        // Result has one value per subset
+        CosetM31.CosetStruct memory sourceDomain,
+        ICosetCache cacheProvider
+    ) internal returns (QM31Field.QM31[] memory foldedEvals) {
+        uint256 gasStart = gasleft();
+        console.log("[FRI GAS] === foldLineSparseEvals START ===");
+        console.log("[FRI GAS]   Number of subsets:", sparseEval.subsetEvals.length);
+        
+        uint256 gasAfterAlloc = gasleft();
         foldedEvals = new QM31Field.QM31[](sparseEval.subsetEvals.length);
+        console.log("[FRI GAS]   Array allocation:", gasAfterAlloc - gasleft());
 
-        // Use the provided source domain directly
-        // Rust: LineDomain wraps a Coset
+        uint256 gasCopyDomain = gasleft();
         CosetM31.CosetStruct memory sourceCoset = sourceDomain;
+        console.log("[FRI GAS]   Domain copy:", gasCopyDomain - gasleft());
 
-        // Iterate through pairs (subset_evals, subset_domain_initial_indexes)
+        uint256 totalIterationGas = 0;
+        uint256 totalIndexAtGas = 0;
+        uint256 totalNewCosetGas = 0;
+        uint256 totalFoldSubsetGas = 0;
+        uint256 totalAssignmentGas = 0;
+
         for (uint256 i = 0; i < sparseEval.subsetEvals.length; i++) {
+            uint256 iterStart = gasleft();
+            console.log("[FRI GAS]   --- Iteration", i, "---");
+            
+            uint256 gasLoadData = gasleft();
             QM31Field.QM31[] memory subsetEval = sparseEval.subsetEvals[i];
             uint256 domainInitialIndex = sparseEval.subsetDomainIndexInitials[i];
+            console.log("[FRI GAS]     Load subset data:", gasLoadData - gasleft());
+            console.log("[FRI GAS]     Subset size:", subsetEval.length);
 
-            // Rust: let fold_domain_initial = source_domain.coset().index_at(domain_initial_index);
-            // This returns CirclePointIndex, not a point!
+            uint256 gasIndexAt = gasleft();
             CosetM31.CirclePointIndex memory foldDomainInitialIndex = CosetM31.indexAt(
                 sourceCoset,
                 domainInitialIndex
             );
+            uint256 indexAtCost = gasIndexAt - gasleft();
+            totalIndexAtGas += indexAtCost;
+            console.log("[FRI GAS]     CosetM31.indexAt:", indexAtCost);
 
-            // Rust: let fold_domain = LineDomain::new(Coset::new(fold_domain_initial, FOLD_STEP));
-            // Coset::new creates a coset with:
-            //   - initial_index = fold_domain_initial
-            //   - step_size = CirclePointIndex::subgroup_gen(FOLD_STEP)
-            //   - initial = initial_index.to_point()
-            //   - step = step_size.to_point()
-            CosetM31.CosetStruct memory foldCoset = CosetM31.newCoset(
+            uint256 gasNewCoset = gasleft();
+            CosetM31.CosetStruct memory foldCoset = cacheProvider.getCachedCoset(
                 foldDomainInitialIndex,
                 FOLD_STEP
             );
+            uint256 newCosetCost = gasNewCoset - gasleft();
+            totalNewCosetGas += newCosetCost;
+            console.log("[FRI GAS]     CosetM31.newCoset (cached):", newCosetCost);
 
-            // Rust: let (_, folded_values) = fold_line(&eval, fold_domain, fold_alpha);
-            // Returns (new_domain, folded_values)
+            uint256 gasFoldSubset = gasleft();
             QM31Field.QM31[] memory foldedValues = _foldLineForSubset(
                 subsetEval,
                 foldCoset,
                 foldingAlpha
             );
+            uint256 foldSubsetCost = gasFoldSubset - gasleft();
+            totalFoldSubsetGas += foldSubsetCost;
+            console.log("[FRI GAS]     _foldLineForSubset:", foldSubsetCost);
 
-            // Rust: folded_values[0]
+            uint256 gasAssign = gasleft();
             foldedEvals[i] = foldedValues[0];
+            uint256 assignCost = gasAssign - gasleft();
+            totalAssignmentGas += assignCost;
+            console.log("[FRI GAS]     Assignment:", assignCost);
+
+            uint256 iterCost = iterStart - gasleft();
+            totalIterationGas += iterCost;
+            console.log("[FRI GAS]     Total iteration:", iterCost);
         }
+
+        console.log("[FRI GAS] === foldLineSparseEvals SUMMARY ===");
+        console.log("[FRI GAS]   Total indexAt:", totalIndexAtGas);
+        console.log("[FRI GAS]   Total newCoset:", totalNewCosetGas);
+        console.log("[FRI GAS]   Total foldSubset:", totalFoldSubsetGas);
+        console.log("[FRI GAS]   Total assignment:", totalAssignmentGas);
+        console.log("[FRI GAS]   Total iterations:", totalIterationGas);
+        console.log("[FRI GAS]   TOTAL FUNCTION:", gasStart - gasleft());
     }
 
     /// @notice Helper to fold a single subset's line evaluations
@@ -2165,16 +2388,17 @@ library FriVerifier {
     function verifyAndFoldLayer(
         FriInnerLayerVerifier memory layer,
         Queries memory layerQueries,
-        QM31Field.QM31[] memory layerQueryEvals
+        QM31Field.QM31[] memory layerQueryEvals,
+        ICosetCache cacheProvider
     )
         internal
-        pure
         returns (
             bool success,
             Queries memory newQueries,
             QM31Field.QM31[] memory newQueryEvals
         )
     {
+        uint256 gasStart = gasleft();
 
         // Rust: assert_eq!(queries.log_domain_size, self.domain.log_size());
         require(
@@ -2183,12 +2407,15 @@ library FriVerifier {
         );
 
         // Initialize witness iterator
+        uint256 gasBeforeWitness = gasleft();
         WitnessIterator memory witnessIter = WitnessIterator({
             witness: layer.proof.friWitness,
             index: 0
         });
+        console.log("[FRI GAS]   verifyAndFold - init witness:", gasBeforeWitness - gasleft());
 
         // Rust: compute_decommitment_positions_and_rebuild_evals(&queries, &evals_at_queries, &mut fri_witness, FOLD_STEP)
+        uint256 gasBeforeCompute = gasleft();
         (
             uint256[] memory decommitmentPositions,
             SparseEvaluation memory sparseEvaluation
@@ -2198,6 +2425,7 @@ library FriVerifier {
                 witnessIter,
                 FOLD_STEP
             );
+        console.log("[FRI GAS]   verifyAndFold - computeDecommitment:", gasBeforeCompute - gasleft());
 
 
         // Rust: Check all proof evals have been consumed
@@ -2206,7 +2434,7 @@ library FriVerifier {
         }
 
         // Rust: Extract decommitted M31 values
-        // sparse_evaluation.subset_evals.iter().flatten().flat_map(|qm31| qm31.to_m31_array()).collect_vec()
+        uint256 gasBeforeExtract = gasleft();
         uint256 totalM31Values = 0;
         for (uint256 i = 0; i < sparseEvaluation.subsetEvals.length; i++) {
             totalM31Values += sparseEvaluation.subsetEvals[i].length * 4; // 4 M31 per QM31
@@ -2223,9 +2451,10 @@ library FriVerifier {
                 decommittedValues[valueIdx++] = qm31.second.imag;
             }
         }
+        console.log("[FRI GAS]   verifyAndFold - extract M31 values:", gasBeforeExtract - gasleft());
 
         // Rust: Create MerkleVerifier with column log sizes (4 columns of same log size)
-        // vec![self.domain.log_size(); SECURE_EXTENSION_DEGREE]
+        uint256 gasBeforeTree = gasleft();
         uint32[] memory columnLogSizes = new uint32[](SECURE_EXTENSION_DEGREE);
         for (uint256 i = 0; i < SECURE_EXTENSION_DEGREE; i++) {
             columnLogSizes[i] = layer.domain.logSize;
@@ -2240,9 +2469,9 @@ library FriVerifier {
         MerkleVerifier.Decommitment memory decommitment = _decodeDecommitment(
             layer.proof.decommitment
         );
+        console.log("[FRI GAS]   verifyAndFold - create tree & decode:", gasBeforeTree - gasleft());
 
         // Rust: Verify Merkle proof with single log size
-        // BTreeMap::from_iter([(self.domain.log_size(), decommitment_positions)])
         MerkleVerifier.QueriesPerLogSize[]
             memory queriesPerLogSize = new MerkleVerifier.QueriesPerLogSize[](1);
         queriesPerLogSize[0] = MerkleVerifier.QueriesPerLogSize({
@@ -2250,6 +2479,7 @@ library FriVerifier {
             queries: decommitmentPositions
         });
 
+        uint256 gasBeforeVerify = gasleft();
         // Verify - MerkleVerifier.verify will revert on failure
         MerkleVerifier.verify(
             verifier,
@@ -2257,21 +2487,26 @@ library FriVerifier {
             decommittedValues,
             decommitment
         );
+        console.log("[FRI GAS]   verifyAndFold - MerkleVerifier.verify:", gasBeforeVerify - gasleft());
 
         // If we get here, verification succeeded
 
         // Rust: Fold queries for next layer
-        // let folded_queries = queries.fold(FOLD_STEP);
+        uint256 gasBeforeFoldQueries = gasleft();
         newQueries = foldQueries(layerQueries, FOLD_STEP);
+        console.log("[FRI GAS]   verifyAndFold - foldQueries:", gasBeforeFoldQueries - gasleft());
 
         // Rust: Fold sparse evaluations using fold_line
-        // let folded_evals = sparse_evaluation.fold_line(self.folding_alpha, self.domain);
+        uint256 gasBeforeFoldLine = gasleft();
         newQueryEvals = foldLineSparseEvals(
             sparseEvaluation,
             layer.foldingAlpha,
-            layer.domain
+            layer.domain,
+            cacheProvider
         );
-
+        console.log("[FRI GAS]   verifyAndFold - foldLineSparseEvals:", gasBeforeFoldLine - gasleft());
+        
+        console.log("[FRI GAS]   verifyAndFold - TOTAL:", gasStart - gasleft());
         return (true, newQueries, newQueryEvals);
     }
 

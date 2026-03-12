@@ -39,3 +39,9 @@ cargo run --bin fibonacci -- --only-deploy
 - `crates/verifier` - Contract deployment tools
 - `crates/contracts` - Alloy type definitions  
 - `crates/examples/fibonacci` - Fibonacci proof verification example
+
+
+## Fibonacci gnark example
+```bash
+cargo run --bin fibonacci -- --prepare-gnark-proof
+```
