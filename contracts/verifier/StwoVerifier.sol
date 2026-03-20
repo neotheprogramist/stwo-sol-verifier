@@ -54,6 +54,8 @@ contract STWOVerifier {
         ComponentParams[] componentParams;
         uint256 nPreprocessedColumns;
         uint32 componentsCompositionLogDegreeBound;
+        uint32 nInteractionDraws;
+        QM31Field.QM31[] interactionMixFelts;
     }
 
     /// @notice Verify a STARK proof
@@ -77,13 +79,14 @@ contract STWOVerifier {
         }
         
         SecureCirclePoly.SecurePoly memory poly = _createSecurePoly(proof.compositionPoly);
-        _initializeVerification(proof, treeColumnLogSizes, publicInputs);
+        _initializeVerification(proof, params, treeColumnLogSizes, publicInputs);
         
         return _performVerificationSteps(proof, params, poly);
     }
 
     function _initializeVerification(
         ProofParser.Proof calldata proof,
+        VerificationParams calldata params,
         uint32[][] memory treeColumnLogSizes,
         uint64[] calldata publicInputs
     ) private {
@@ -106,6 +109,17 @@ contract STWOVerifier {
                 treeColumnLogSizes[i],
                 _channel
             );
+
+            // After tree[1] (main trace), replay interaction channel operations:
+            // draw interaction challenges then mix claimed sums before tree[2]
+            if (i == 1 && params.nInteractionDraws > 0) {
+                for (uint32 j = 0; j < params.nInteractionDraws; j++) {
+                    _channel.drawSecureFelt();
+                }
+                if (params.interactionMixFelts.length > 0) {
+                    _channel.mixFelts(params.interactionMixFelts);
+                }
+            }
         }
 
         _channel.drawSecureFelt();
