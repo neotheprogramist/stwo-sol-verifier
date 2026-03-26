@@ -160,6 +160,8 @@ library KeccakChannelLib {
     
     /// @notice Verify proof-of-work nonce
     function verifyPowNonce(ChannelState storage state, uint32 nBits, uint64 nonce) internal view returns (bool) {
+
+
         bytes memory prefixInput = abi.encodePacked(
             _u32ToLittleEndian(POW_PREFIX),
             new bytes(24),
@@ -173,9 +175,7 @@ library KeccakChannelLib {
             _u64ToLittleEndian(nonce)
         );
         bytes32 finalHash = keccak256(finalInput);
-        
-        uint256 trailingZeros = _countTrailingZeros(finalHash);
-        
+        uint256 trailingZeros = _countTrailingZeros128(finalHash);
         return trailingZeros >= nBits;
     }
     
@@ -229,23 +229,29 @@ library KeccakChannelLib {
     
     /// @notice Convert u64 to little-endian bytes
     function _u64ToLittleEndian(uint64 value) private pure returns (bytes8) {
-        return bytes8(
-            _u32ToLittleEndian(uint32(value)) |
-            (bytes8(_u32ToLittleEndian(uint32(value >> 32))) << 32)
-        );
+        return bytes8(abi.encodePacked(
+            uint8(value),
+            uint8(value >> 8),
+            uint8(value >> 16),
+            uint8(value >> 24),
+            uint8(value >> 32),
+            uint8(value >> 40),
+            uint8(value >> 48),
+            uint8(value >> 56)
+        ));
     }
     
-    /// @notice Count trailing zeros in hash
-    function _countTrailingZeros(bytes32 hash) private pure returns (uint256) {
+    /// @notice Count trailing zeros in first 128 bits of hash (same as Rust u128::trailing_zeros)
+    function _countTrailingZeros128(bytes32 hash) private pure returns (uint256) {
         uint256 zeros = 0;
         
-        uint256 value = 0;
-        for (uint256 i = 0; i < 32; i++) {
-            value |= uint256(uint8(hash[i])) << (i * 8);
+        uint128 value = 0;
+        for (uint256 i = 0; i < 16; i++) {
+            value |= uint128(uint8(hash[i])) << uint128(i * 8);
         }
         
         if (value == 0) {
-            return 256;
+            return 128;
         }
         
         while ((value & 1) == 0) {

@@ -2,6 +2,7 @@
 pragma solidity ^0.8.20;
 
 import "../fields/M31Field.sol";
+import {console} from "forge-std/console.sol";
 
 /// @title MerkleVerifier
 /// @notice Verifies Merkle tree decommitments for vector commitment schemes
@@ -148,65 +149,142 @@ library MerkleVerifier {
         uint32[] memory queriedValues,
         Decommitment memory decommitment
     ) internal pure {
-        // Find max log size
+        uint256 nColumns = tree.columnLogSizes.length;
+        if (nColumns == 0) {
+            return;
+        }
+
         uint32 maxLogSize = 0;
-        for (uint256 i = 0; i < tree.columnLogSizes.length; i++) {
+        for (uint256 i = 0; i < nColumns; i++) {
             if (tree.columnLogSizes[i] > maxLogSize) {
                 maxLogSize = tree.columnLogSizes[i];
             }
         }
 
-        if (maxLogSize == 0) {
-            return; // No columns to verify
+        uint256[] memory queryPositions = _findQueriesForLogSize(queriesPerLogSize, maxLogSize);
+        if (queryPositions.length == 0) {
+            revert InvalidQuery("Missing queries for max log size");
         }
 
-        // Initialize iterators (simulating Rust iterators)
-        IteratorState memory iterators = IteratorState({
-            queriedValuesIndex: 0,
-            hashWitnessIndex: 0,
-            columnWitnessIndex: 0,
-            prevLayerIndex: 0
-        });
-
-        // Layer hashes for propagation (matches Rust last_layer_hashes)
-        LayerHash[] memory lastLayerHashes;
-        
-        // Process each layer from max_log_size down to 0 (matches Rust loop)
-        for (uint32 layerLogSize = maxLogSize; ; layerLogSize--) {
-            // Get number of columns in this layer
-            uint256 nColumnsInLayer = _getColumnsForLogSize(tree, layerLogSize);
-            
-            // Process layer and get new layer hashes
-            lastLayerHashes = _processLayer(
-                layerLogSize,
-                nColumnsInLayer,
-                queriesPerLogSize,
-                lastLayerHashes,
-                queriedValues,
-                decommitment,
-                iterators
-            );
-            
-            if (layerLogSize == 0) break; // Prevent underflow
+        if (queriedValues.length % nColumns != 0) {
+            revert InvalidQuery("Queried values length mismatch");
+        }
+        uint256 nQueries = queriedValues.length / nColumns;
+        if (nQueries != queryPositions.length) {
+            revert InvalidQuery("Query count mismatch");
         }
 
-        // Check that all witnesses and values have been consumed (matches Rust)
-        if (iterators.hashWitnessIndex < decommitment.hashWitness.length) {
+        // Check duplicate query positions consistency, same as Rust verifier.
+        for (uint256 i = 0; i + 1 < nQueries; i++) {
+            if (queryPositions[i] == queryPositions[i + 1]) {
+                for (uint256 c = 0; c < nColumns; c++) {
+                    uint256 base = c * nQueries;
+                    if (queriedValues[base + i] != queriedValues[base + i + 1]) {
+                        revert InvalidQuery("Duplicate query values mismatch");
+                    }
+                }
+            }
+        }
+
+        uint256 uniqueQueryCount = _countUniqueConsecutive(queryPositions);
+        uint256[] memory sortedColumnIndices = _sortedColumnIndicesByLogSize(tree.columnLogSizes);
+
+        // Build deduplicated per-column values in sorted column order.
+        uint32[][] memory sortedDedupValues = new uint32[][](nColumns);
+        for (uint256 sortedCol = 0; sortedCol < nColumns; sortedCol++) {
+            uint256 colIdx = sortedColumnIndices[sortedCol];
+            uint32[] memory dedupVals = new uint32[](uniqueQueryCount);
+            uint256 writeIdx = 0;
+            uint256 base = colIdx * nQueries;
+            for (uint256 q = 0; q < nQueries; q++) {
+                if (q == 0 || queryPositions[q] != queryPositions[q - 1]) {
+                    dedupVals[writeIdx++] = queriedValues[base + q];
+                }
+            }
+            sortedDedupValues[sortedCol] = dedupVals;
+        }
+
+        // Build leaves for unique query positions.
+        LayerHash[] memory prevLayerHashes = new LayerHash[](uniqueQueryCount);
+        uint256 leafIdx = 0;
+        for (uint256 q = 0; q < nQueries; q++) {
+            if (q == 0 || queryPositions[q] != queryPositions[q - 1]) {
+                uint32[] memory row = new uint32[](nColumns);
+                for (uint256 c = 0; c < nColumns; c++) {
+                    row[c] = sortedDedupValues[c][leafIdx];
+                }
+                prevLayerHashes[leafIdx] = LayerHash({
+                    nodeIndex: queryPositions[q],
+                    hash: _hashLeaf(row)
+                });
+                leafIdx++;
+            }
+        }
+
+        // Verify inner layers using hash witness only (lifted verifier semantics).
+        uint256 hashWitnessIndex = 0;
+        for (uint32 layer = 0; layer < maxLogSize; layer++) {
+            LayerHash[] memory currLayerHashes = new LayerHash[](prevLayerHashes.length);
+            uint256 currCount = 0;
+
+            uint256 i = 0;
+            while (i < prevLayerHashes.length) {
+                uint256 idx0 = prevLayerHashes[i].nodeIndex;
+                bytes32 hash0 = prevLayerHashes[i].hash;
+
+                bytes32 left;
+                bytes32 right;
+
+                bool hasSibling = (i + 1 < prevLayerHashes.length) &&
+                    (prevLayerHashes[i + 1].nodeIndex == (idx0 ^ 1));
+
+                if (hasSibling) {
+                    bytes32 hash1 = prevLayerHashes[i + 1].hash;
+                    if ((idx0 & 1) == 0) {
+                        left = hash0;
+                        right = hash1;
+                    } else {
+                        left = hash1;
+                        right = hash0;
+                    }
+                    i += 2;
+                } else {
+                    if (hashWitnessIndex >= decommitment.hashWitness.length) {
+                        revert MerkleVerificationError("Witness too short");
+                    }
+                    bytes32 witness = decommitment.hashWitness[hashWitnessIndex++];
+                    if ((idx0 & 1) == 0) {
+                        left = hash0;
+                        right = witness;
+                    } else {
+                        left = witness;
+                        right = hash0;
+                    }
+                    i += 1;
+                }
+
+                currLayerHashes[currCount++] = LayerHash({
+                    nodeIndex: idx0 >> 1,
+                    hash: _hashChildren(left, right)
+                });
+            }
+
+            LayerHash[] memory resized = new LayerHash[](currCount);
+            for (uint256 k = 0; k < currCount; k++) {
+                resized[k] = currLayerHashes[k];
+            }
+            prevLayerHashes = resized;
+        }
+
+        if (hashWitnessIndex < decommitment.hashWitness.length) {
             revert MerkleVerificationError("Witness too long");
         }
-        if (iterators.queriedValuesIndex < queriedValues.length) {
-            revert MerkleVerificationError("Too many queried values");
-        }
-        if (iterators.columnWitnessIndex < decommitment.columnWitness.length) {
-            revert MerkleVerificationError("Witness too long");
-        }
 
-        // Verify final root (matches Rust)
-        if (lastLayerHashes.length != 1) {
+        if (prevLayerHashes.length != 1) {
             revert MerkleVerificationError("Expected single root hash");
         }
-        
-        if (lastLayerHashes[0].hash != tree.root) {
+
+        if (prevLayerHashes[0].hash != tree.root) {
             revert MerkleVerificationError("Root mismatch");
         }
     }
@@ -242,7 +320,7 @@ library MerkleVerifier {
         uint256 prevLayerIndex; // For iterating through previousLayerHashes
     }
 
-    /// @notice Process single layer of Merkle tree (matches Rust layer processing logic)
+    /// @notice Process single layer of Merkle tree (legacy path, not used by lifted verifier)
     function _processLayer(
         uint32 layerLogSize,
         uint256 nColumnsInLayer,
@@ -290,11 +368,18 @@ library MerkleVerifier {
         }
     }
 
-    /// @notice Hash node with column values (matches Rust hash_node with children_hashes: Some)
+    /// @notice Hash children (lifted verifier semantics): keccak(left || right)
     /// @param leftChild Left child hash
-    /// @param rightChild Right child hash  
-    /// @param columnValues Column values for this node
-    /// @return Hash of node
+    /// @param rightChild Right child hash
+    /// @return Hash of parent
+    function _hashChildren(
+        bytes32 leftChild,
+        bytes32 rightChild
+    ) internal pure returns (bytes32) {
+        return keccak256(abi.encodePacked(leftChild, rightChild));
+    }
+
+    /// @notice Hash node with column values (legacy path)
     function _hashNode(
         bytes32 leftChild,
         bytes32 rightChild, 
@@ -324,26 +409,63 @@ library MerkleVerifier {
         return keccak256(data);
     }
 
-    /// @notice Hash leaf with column values (matches Rust hash_node with children_hashes: None)
+    /// @notice Hash leaf with column values (lifted verifier semantics): keccak(little_endian_values)
     /// @param columnValues Column values for this leaf
     /// @return Hash of leaf
     function _hashLeaf(uint32[] memory columnValues) internal pure returns (bytes32) {
-        // Match Rust: LEAF_PREFIX + column_values
-        bytes memory data = new bytes(64 + columnValues.length * 4);
-        
-        // LEAF_PREFIX: "leaf" + 60 zero bytes
-        data[0] = 0x6c; // 'l'
-        data[1] = 0x65; // 'e'
-        data[2] = 0x61; // 'a'
-        data[3] = 0x66; // 'f'
-        // bytes 4-63 are already zero
+        bytes memory data = new bytes(columnValues.length * 4);
         
         // Add column values in little-endian format
         for (uint256 i = 0; i < columnValues.length; i++) {
-            _writeUint32LE(data, 64 + i * 4, columnValues[i]);
+            _writeUint32LE(data, i * 4, columnValues[i]);
         }
         
         return keccak256(data);
+    }
+
+    function _findQueriesForLogSize(
+        QueriesPerLogSize[] memory queriesPerLogSize,
+        uint32 logSize
+    ) internal pure returns (uint256[] memory) {
+        for (uint256 i = 0; i < queriesPerLogSize.length; i++) {
+            if (queriesPerLogSize[i].logSize == logSize) {
+                return queriesPerLogSize[i].queries;
+            }
+        }
+        return new uint256[](0);
+    }
+
+    function _countUniqueConsecutive(uint256[] memory values) internal pure returns (uint256 count) {
+        if (values.length == 0) {
+            return 0;
+        }
+        count = 1;
+        for (uint256 i = 1; i < values.length; i++) {
+            if (values[i] != values[i - 1]) {
+                count++;
+            }
+        }
+    }
+
+    function _sortedColumnIndicesByLogSize(
+        uint32[] memory columnLogSizes
+    ) internal pure returns (uint256[] memory indices) {
+        indices = new uint256[](columnLogSizes.length);
+        for (uint256 i = 0; i < columnLogSizes.length; i++) {
+            indices[i] = i;
+        }
+
+        // Stable insertion sort by log size.
+        for (uint256 i = 1; i < indices.length; i++) {
+            uint256 key = indices[i];
+            uint32 keyLog = columnLogSizes[key];
+            uint256 j = i;
+            while (j > 0 && columnLogSizes[indices[j - 1]] > keyLog) {
+                indices[j] = indices[j - 1];
+                j--;
+            }
+            indices[j] = key;
+        }
     }
 
     /// @notice Write uint32 value as little-endian bytes

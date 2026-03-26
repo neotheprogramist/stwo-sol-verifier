@@ -1,9 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 pragma solidity ^0.8.20;
 
+import "../fields/QM31Field.sol";
+import "../core/KeccakChannelLib.sol";
+
 /// @title PcsConfig
 /// @notice Configuration for Polynomial Commitment Scheme verification
 library PcsConfig {
+    using KeccakChannelLib for KeccakChannelLib.ChannelState;
 
     /// @notice FRI configuration
     struct FriConfig {
@@ -16,6 +20,7 @@ library PcsConfig {
     struct Config {
         uint32 powBits;
         FriConfig friConfig;
+        uint32 liftingLogSize; // 0 means None
     }
 
     /// @notice Error thrown when configuration parameters are invalid
@@ -35,7 +40,8 @@ library PcsConfig {
     function defaultConfig() internal pure returns (Config memory) {
         return Config({
             powBits: 20,  // 20-bit proof of work (~1M operations)
-            friConfig: defaultFriConfig()
+            friConfig: defaultFriConfig(),
+            liftingLogSize: 0
         });
     }
 
@@ -48,7 +54,8 @@ library PcsConfig {
                 logBlowupFactor: 1,
                 logLastLayerDegreeBound: 0,
                 nQueries: 84
-            })
+            }),
+            liftingLogSize: 0
         });
     }
 
@@ -147,7 +154,8 @@ library PcsConfig {
             config.powBits,
             config.friConfig.logBlowupFactor,
             config.friConfig.logLastLayerDegreeBound,
-            config.friConfig.nQueries
+            config.friConfig.nQueries,
+            config.liftingLogSize
         );
     }
 
@@ -159,8 +167,9 @@ library PcsConfig {
             uint32 powBits,
             uint32 logBlowupFactor,
             uint32 logLastLayerDegreeBound,
-            uint256 nQueries
-        ) = abi.decode(data, (uint32, uint32, uint32, uint256));
+            uint256 nQueries,
+            uint32 liftingLogSize
+        ) = abi.decode(data, (uint32, uint32, uint32, uint256, uint32));
         
         return Config({
             powBits: powBits,
@@ -168,7 +177,8 @@ library PcsConfig {
                 logBlowupFactor: logBlowupFactor,
                 logLastLayerDegreeBound: logLastLayerDegreeBound,
                 nQueries: nQueries
-            })
+            }),
+            liftingLogSize: liftingLogSize
         });
     }
 
@@ -177,5 +187,31 @@ library PcsConfig {
     /// @return Hash of configuration
     function hash(Config memory config) internal pure returns (bytes32) {
         return keccak256(encode(config));
+    }
+
+    /// @notice Mix configuration into channel for Fiat-Shamir (matches Rust PcsConfig::mix_into)
+    function mixInto(
+        Config memory config,
+        KeccakChannelLib.ChannelState storage channelState
+    ) internal {
+        QM31Field.QM31[] memory felts = new QM31Field.QM31[](2);
+
+        // First felt packs pow_bits, log_blowup_factor, n_queries, log_last_layer_degree_bound
+        felts[0] = QM31Field.fromU32Unchecked(
+            config.powBits,
+            config.friConfig.logBlowupFactor,
+            uint32(config.friConfig.nQueries),
+            config.friConfig.logLastLayerDegreeBound
+        );
+
+        // Second felt packs fold_step (fixed to 1) and lifting_log_size (0 means None)
+        felts[1] = QM31Field.fromU32Unchecked(
+            1,
+            config.liftingLogSize,
+            0,
+            0
+        );
+
+        channelState.mixFelts(felts);
     }
 }

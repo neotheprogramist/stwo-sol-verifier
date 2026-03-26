@@ -27,39 +27,28 @@ library PolyUtils {
         
         uint256 n = values.length;
         require(n == (1 << foldingFactors.length), "Values length must be 2^(folding factors length)");
-        
-        if (n == 1) {
+
+        return _foldRange(values, foldingFactors, 0, n, 0);
+    }
+
+    function _foldRange(
+        uint32[] memory values,
+        QM31Field.QM31[] memory foldingFactors,
+        uint256 start,
+        uint256 len,
+        uint256 factorIdx
+    ) private pure returns (QM31Field.QM31 memory) {
+        if (len == 1) {
             // Convert M31 to QM31 (M31 becomes real part of first CM31)
-            return QM31Field.fromM31(values[0], 0, 0, 0);
+            return QM31Field.fromM31(values[start], 0, 0, 0);
         }
-        
-        // Split into left and right halves
-        uint256 halfN = n / 2;
-        uint32[] memory lhsValues = new uint32[](halfN);
-        uint32[] memory rhsValues = new uint32[](halfN);
-        QM31Field.QM31[] memory remainingFactors = new QM31Field.QM31[](foldingFactors.length - 1);
-        
-        // Copy left half
-        for (uint256 i = 0; i < halfN; i++) {
-            lhsValues[i] = values[i];
-        }
-        
-        // Copy right half
-        for (uint256 i = 0; i < halfN; i++) {
-            rhsValues[i] = values[halfN + i];
-        }
-        
-        // Copy remaining folding factors (skip first one)
-        for (uint256 i = 1; i < foldingFactors.length; i++) {
-            remainingFactors[i - 1] = foldingFactors[i];
-        }
-        
-        // Recursive fold
-        QM31Field.QM31 memory lhsVal = fold(lhsValues, remainingFactors);
-        QM31Field.QM31 memory rhsVal = fold(rhsValues, remainingFactors);
-        
-        // Return: lhs_val + rhs_val * folding_factor[0]
-        return QM31Field.add(lhsVal, QM31Field.mul(rhsVal, foldingFactors[0]));
+
+        uint256 half = len / 2;
+        QM31Field.QM31 memory lhsVal = _foldRange(values, foldingFactors, start, half, factorIdx + 1);
+        QM31Field.QM31 memory rhsVal = _foldRange(values, foldingFactors, start + half, half, factorIdx + 1);
+
+        // Same formula/order as Rust: lhs + rhs * folding_factor
+        return QM31Field.add(lhsVal, QM31Field.mul(rhsVal, foldingFactors[factorIdx]));
     }
 
     /**

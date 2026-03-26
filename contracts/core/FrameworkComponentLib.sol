@@ -228,14 +228,34 @@ library FrameworkComponentLib {
 
     function maskPoints(
         ComponentState storage state,
-        CirclePoint.Point memory point
+        CirclePoint.Point memory point,
+        uint32 maxLogDegreeBound
     ) internal view returns (SamplePoints memory samplePoints) {
         require(state.isInitialized, "Component not initialized");
 
-        CirclePointM31.Point memory traceStepM31 = _getTraceStep(state.logSize);
+        CirclePointM31.Point memory traceStepM31 = _getTraceStep(maxLogDegreeBound);
         samplePoints = _initializeSamplePoints();
-        samplePoints = _processTraceLocations(state, point, traceStepM31, samplePoints);
-        samplePoints = _processPreprocessedColumns(state, point, samplePoints);
+
+        uint256 nTrees = 3;
+        for (uint256 treeIdx = 0; treeIdx < nTrees && treeIdx < state.info.maskOffsets.length; treeIdx++) {
+            uint256 nCols = state.info.maskOffsets[treeIdx].length;
+            samplePoints.points[treeIdx] = new CirclePoint.Point[][](nCols);
+            samplePoints.nColumns[treeIdx] = nCols;
+
+            for (uint256 colIdx = 0; colIdx < nCols; colIdx++) {
+                int32[] memory offsets = state.info.maskOffsets[treeIdx][colIdx];
+                samplePoints.points[treeIdx][colIdx] = new CirclePoint.Point[](offsets.length);
+
+                for (uint256 offsetIdx = 0; offsetIdx < offsets.length; offsetIdx++) {
+                    samplePoints.points[treeIdx][colIdx][offsetIdx] = _computeMaskPoint(
+                        point,
+                        traceStepM31,
+                        offsets[offsetIdx]
+                    );
+                    samplePoints.totalPoints++;
+                }
+            }
+        }
         
         return samplePoints;
     }

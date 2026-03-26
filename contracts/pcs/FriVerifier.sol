@@ -13,6 +13,7 @@ import "../fields/CM31Field.sol";
 import "../fields/M31Field.sol";
 import "../core/KeccakChannelLib.sol";
 import "../vcs/MerkleVerifier.sol";
+import {console} from "forge-std/console.sol";
 
 /// @title FriVerifier
 /// @notice Library for FRI proximity proof verification
@@ -129,6 +130,30 @@ library FriVerifier {
     /// @param lineCoeffs Precomputed line coefficients for each batch and column
     struct QuotientConstants {
         QM31Field.QM31[][][] lineCoeffs; // [batch][column][3] for (a, b, c) coefficients
+    }
+
+    /// @notice Point sample enriched with precomputed random coefficient.
+    struct PointSampleWithRandom {
+        PointSample sample;
+        QM31Field.QM31 randomCoeff;
+    }
+
+    /// @notice Column/value/random triple used by current STWO FRI answers flow.
+    struct ColumnAndValueWithRandom {
+        uint256 columnIndex;
+        QM31Field.QM31 value;
+        QM31Field.QM31 randomCoeff;
+    }
+
+    /// @notice Column sample batch with per-entry random coefficient.
+    struct ColumnSampleBatchWithRandom {
+        CirclePoint.Point point;
+        ColumnAndValueWithRandom[] columnsAndValues;
+    }
+
+    /// @notice Quotient constants for the current STWO FRI answers flow.
+    struct QuotientConstantsWithRandom {
+        QM31Field.QM31[][][] lineCoeffs;
     }
 
     /// @notice FRI verification error types
@@ -689,84 +714,416 @@ library FriVerifier {
     /// @param columnLogSizes Array of log sizes for each tree and column
     /// @param samples Point samples organized by tree, column and point
     /// @param randomCoeff Random coefficient for linear combination
-    /// @param queryPositionsByLogSize Query positions mapped by log size
+    /// @param queryPositions Raw sampled query positions (lifting domain)
     /// @param queriedValues Queried values from each tree
+    /// @param liftingLogSize Lifting domain log size
     /// @param nColumnsPerLogSize Number of columns per log size for each tree
     /// @return result 2D array of quotient evaluations for FRI decommitment (columns x query values)
     function friAnswers(
         uint32[][] memory columnLogSizes, // TreeVec<Vec<u32>>
         PointSample[][][] memory samples, // TreeVec<Vec<Vec<PointSample>>>
         QM31Field.QM31 memory randomCoeff, // SecureField
-        QueryPositionsByLogSize memory queryPositionsByLogSize, // &BTreeMap<u32, Vec<usize>>
+        uint256[] memory queryPositions,
         uint32[][] memory queriedValues, // TreeVec<Vec<BaseField>> (BaseField = M31 = uint32)
+        uint32 liftingLogSize,
         uint32[][][] memory nColumnsPerLogSize // TreeVec<&BTreeMap<u32, usize>>
     ) internal pure returns (QM31Field.QM31[][] memory result) {
+        // _logFriAnswersInputs(
+        //     columnLogSizes,
+        //     samples,
+        //     randomCoeff,
+        //     queryPositions,
+        //     queriedValues,
+        //     liftingLogSize,
+        //     nColumnsPerLogSize
+        // );
+        
+        // Keep compatibility with signature; current STWO path does not use per-log-size column map.
+        nColumnsPerLogSize;
+        require(queryPositions.length > 0, "Missing lifting queries");
 
-        // Flatten column log sizes and create (logSize, samples) pairs
-        LogSizeAndSamples[] memory flattenedData = _flattenAndCreatePairs(
+        uint256 nQueries = queryPositions.length;
+        uint32[][] memory queriedValuesPerColumn = _flattenQueriedValuesPerColumn(
             columnLogSizes,
-            samples
+            queriedValues,
+            nQueries
+        );
+        uint256 totalColumns = queriedValuesPerColumn.length;
+
+        // Build sample stream with periodicity and random powers (current Rust semantics).
+        PointSampleWithRandom[][] memory samplesWithRandom = _buildSamplesWithRandomnessAndPeriodicity(
+            samples,
+            columnLogSizes,
+            liftingLogSize,
+            randomCoeff
         );
 
-        // Sort by log size in DESCENDING order (matches Rust: sorted_by_key(|(log_size, ..)| Reverse(*log_size)))
-        _sortByLogSizeAscending(flattenedData);
-        
-        // Get unique log sizes from flattened data in descending order
-        uint32[] memory uniqueLogSizes = _getUniqueLogSizesFromFlattened(flattenedData);
+        ColumnSampleBatchWithRandom[] memory sampleBatches = _createColumnSampleBatchesWithRandom(
+            samplesWithRandom
+        );
+        QuotientConstantsWithRandom memory quotientConstants = _calculateQuotientConstantsWithRandom(
+            sampleBatches
+        );
 
-        
-        result = new QM31Field.QM31[][](uniqueLogSizes.length);
+        CircleDomain.CircleDomainStruct memory liftingDomain = _createCommitmentDomain(liftingLogSize);
 
-        // Create mutable iterator state for queried values
-        QueriedValuesIterator memory queriedValuesIter = QueriedValuesIterator({
-            data: queriedValues,
-            positions: new uint256[](queriedValues.length)
-        });
+        QM31Field.QM31[] memory answers = new QM31Field.QM31[](nQueries);
+        for (uint256 idx = 0; idx < nQueries; idx++) {
+            CirclePointM31.Point memory domainPoint = _getDomainPointAtQuery(
+                liftingDomain,
+                queryPositions[idx],
+                liftingLogSize
+            );
 
-        // Process each unique log size (already in descending order from sorting)
-        for (uint256 i = 0; i < uniqueLogSizes.length; i++) {
-            uint32 logSize = uniqueLogSizes[i];
-            
-            // Find this logSize in queryPositionsByLogSize
-            uint256[] memory queryPositions;
-            for (uint256 j = 0; j < queryPositionsByLogSize.logSizes.length; j++) {
-                if (queryPositionsByLogSize.logSizes[j] == logSize) {
-                    queryPositions = queryPositionsByLogSize.queryPositions[j];
+            uint32[] memory queriedValuesAtRow = new uint32[](totalColumns);
+            for (uint256 c = 0; c < totalColumns; c++) {
+                queriedValuesAtRow[c] = queriedValuesPerColumn[c][idx];
+            }
+
+            answers[idx] = _accumulateRowQuotientsWithRandom(
+                sampleBatches,
+                queriedValuesAtRow,
+                quotientConstants,
+                domainPoint
+            );
+        }
+
+        // Current STWO FRI expects first-layer query evals as a single vector.
+        result = new QM31Field.QM31[][](1);
+        result[0] = answers;
+    }
+
+    function _logFriAnswersInputs(
+        uint32[][] memory columnLogSizes,
+        PointSample[][][] memory samples,
+        QM31Field.QM31 memory randomCoeff,
+        uint256[] memory queryPositions,
+        uint32[][] memory queriedValues,
+        uint32 liftingLogSize,
+        uint32[][][] memory nColumnsPerLogSize
+    ) private pure {
+        console.log("--- FriVerifier.friAnswers input dump start ---");
+
+        uint32[4] memory randomCoeffLimbs = QM31Field.toM31Array(randomCoeff);
+        console.log("randomCoeff:");
+        console.log("  limbs[0], limbs[1]:", randomCoeffLimbs[0], randomCoeffLimbs[1]);
+        console.log("  limbs[2], limbs[3]:", randomCoeffLimbs[2], randomCoeffLimbs[3]);
+        console.log("liftingLogSize:", liftingLogSize);
+
+        console.log("columnLogSizes trees:", columnLogSizes.length);
+        for (uint256 t = 0; t < columnLogSizes.length; t++) {
+            console.log("  columnLogSizes tree:", t);
+            console.log("  columnLogSizes tree len:", columnLogSizes[t].length);
+            for (uint256 c = 0; c < columnLogSizes[t].length; c++) {
+                console.log("    columnLogSizes[tree][col]:", t, c, columnLogSizes[t][c]);
+            }
+        }
+
+        console.log("queryPositions len:", queryPositions.length);
+        for (uint256 i = 0; i < queryPositions.length; i++) {
+            console.log("  queryPositions[i]:", i, queryPositions[i]);
+        }
+
+        console.log("queriedValues trees:", queriedValues.length);
+        for (uint256 t = 0; t < queriedValues.length; t++) {
+            console.log("  queriedValues tree:", t);
+            console.log("  queriedValues tree len:", queriedValues[t].length);
+            for (uint256 i = 0; i < queriedValues[t].length; i++) {
+                console.log("    queriedValues[tree][i]:", t, i, queriedValues[t][i]);
+            }
+        }
+
+        console.log("samples trees:", samples.length);
+        for (uint256 t = 0; t < samples.length; t++) {
+            console.log("  samples tree:", t);
+            console.log("  samples tree cols:", samples[t].length);
+            for (uint256 c = 0; c < samples[t].length; c++) {
+                console.log("    samples tree:", t, "col:", c);
+                console.log("    samples tree/col points:", samples[t][c].length);
+                for (uint256 s = 0; s < samples[t][c].length; s++) {
+                    PointSample memory ps = samples[t][c][s];
+                    uint32[4] memory xLimbs = QM31Field.toM31Array(ps.point.x);
+                    uint32[4] memory yLimbs = QM31Field.toM31Array(ps.point.y);
+                    uint32[4] memory vLimbs = QM31Field.toM31Array(ps.value);
+
+                    console.log("      sample idx:", s);
+                    console.log("        point.x limbs[0], limbs[1]:", xLimbs[0], xLimbs[1]);
+                    console.log("        point.x limbs[2], limbs[3]:", xLimbs[2], xLimbs[3]);
+                    console.log("        point.y limbs[0], limbs[1]:", yLimbs[0], yLimbs[1]);
+                    console.log("        point.y limbs[2], limbs[3]:", yLimbs[2], yLimbs[3]);
+                    console.log("        value  limbs[0], limbs[1]:", vLimbs[0], vLimbs[1]);
+                    console.log("        value  limbs[2], limbs[3]:", vLimbs[2], vLimbs[3]);
+                }
+            }
+        }
+
+        console.log("nColumnsPerLogSize trees:", nColumnsPerLogSize.length);
+        for (uint256 t = 0; t < nColumnsPerLogSize.length; t++) {
+            console.log("  nColumnsPerLogSize tree:", t);
+            console.log("  nColumnsPerLogSize tree entries:", nColumnsPerLogSize[t].length);
+            for (uint256 e = 0; e < nColumnsPerLogSize[t].length; e++) {
+                console.log("    nColumnsPerLogSize tree:", t, "entry:", e);
+                console.log("    nColumnsPerLogSize tree/entry len:", nColumnsPerLogSize[t][e].length);
+                for (uint256 k = 0; k < nColumnsPerLogSize[t][e].length; k++) {
+                    console.log("      nColumnsPerLogSize tree:", t, "entry:", e);
+                    console.log("      nColumnsPerLogSize k:", k, "value:", nColumnsPerLogSize[t][e][k]);
+                }
+            }
+        }
+
+        console.log("--- FriVerifier.friAnswers input dump end ---");
+    }
+
+    function _flattenQueriedValuesPerColumn(
+        uint32[][] memory columnLogSizes,
+        uint32[][] memory queriedValues,
+        uint256 nQueries
+    ) private pure returns (uint32[][] memory queriedValuesPerColumn) {
+        uint256 totalColumns = 0;
+        for (uint256 treeIdx = 0; treeIdx < columnLogSizes.length; treeIdx++) {
+            totalColumns += columnLogSizes[treeIdx].length;
+        }
+
+        queriedValuesPerColumn = new uint32[][](totalColumns);
+        uint256 globalColIdx = 0;
+
+        for (uint256 treeIdx = 0; treeIdx < columnLogSizes.length; treeIdx++) {
+            uint256 colsInTree = columnLogSizes[treeIdx].length;
+            require(
+                queriedValues[treeIdx].length == colsInTree * nQueries,
+                "Queried values/tree shape mismatch"
+            );
+
+            for (uint256 colIdx = 0; colIdx < colsInTree; colIdx++) {
+                uint32[] memory perCol = new uint32[](nQueries);
+                uint256 base = colIdx * nQueries;
+                for (uint256 q = 0; q < nQueries; q++) {
+                    perCol[q] = queriedValues[treeIdx][base + q];
+                }
+                queriedValuesPerColumn[globalColIdx++] = perCol;
+            }
+        }
+    }
+
+    function _buildSamplesWithRandomnessAndPeriodicity(
+        PointSample[][][] memory samples,
+        uint32[][] memory columnLogSizes,
+        uint32 liftingLogSize,
+        QM31Field.QM31 memory randomCoeff
+    ) private pure returns (PointSampleWithRandom[][] memory out) {
+        uint256 totalColumns = 0;
+        for (uint256 treeIdx = 0; treeIdx < samples.length; treeIdx++) {
+            require(samples[treeIdx].length == columnLogSizes[treeIdx].length, "Samples/log-size mismatch");
+            totalColumns += samples[treeIdx].length;
+        }
+
+        out = new PointSampleWithRandom[][](totalColumns);
+
+        CanonicCosetM31.CanonicCosetStruct memory liftingCoset = CanonicCosetM31.newCanonicCoset(liftingLogSize);
+        CirclePointM31.Point memory liftingStepM31 = CanonicCosetM31.step(liftingCoset);
+
+        QM31Field.QM31 memory currRand = QM31Field.one();
+        uint256 globalColIdx = 0;
+
+        for (uint256 treeIdx = 0; treeIdx < samples.length; treeIdx++) {
+            for (uint256 colIdx = 0; colIdx < samples[treeIdx].length; colIdx++) {
+                PointSample[] memory colSamples = samples[treeIdx][colIdx];
+                uint256 extra = colSamples.length == 2 ? 1 : 0;
+                PointSampleWithRandom[] memory expanded = new PointSampleWithRandom[](colSamples.length + extra);
+                uint256 w = 0;
+
+                if (colSamples.length == 2) {
+                    CirclePointM31.Point memory periodGeneratorM31 = CirclePointM31.repeatedDouble(
+                        liftingStepM31,
+                        columnLogSizes[treeIdx][colIdx]
+                    );
+                    CirclePoint.Point memory periodGenerator = CirclePointM31.toQM31(periodGeneratorM31);
+                    PointSample memory periodic;
+                    periodic.point = CirclePoint.add(colSamples[1].point, periodGenerator);
+                    periodic.value = colSamples[1].value;
+
+                    expanded[w] = PointSampleWithRandom({sample: periodic, randomCoeff: currRand});
+                    currRand = QM31Field.mul(currRand, randomCoeff);
+                    w++;
+                }
+
+                for (uint256 s = 0; s < colSamples.length; s++) {
+                    expanded[w] = PointSampleWithRandom({sample: colSamples[s], randomCoeff: currRand});
+                    currRand = QM31Field.mul(currRand, randomCoeff);
+                    w++;
+                }
+
+                out[globalColIdx++] = expanded;
+            }
+        }
+    }
+
+    function _createColumnSampleBatchesWithRandom(
+        PointSampleWithRandom[][] memory samplesWithRandom
+    ) private pure returns (ColumnSampleBatchWithRandom[] memory batches) {
+        uint256 totalSamples = 0;
+        for (uint256 i = 0; i < samplesWithRandom.length; i++) {
+            totalSamples += samplesWithRandom[i].length;
+        }
+
+        if (totalSamples == 0) {
+            return new ColumnSampleBatchWithRandom[](0);
+        }
+
+        CirclePoint.Point[] memory allPoints = new CirclePoint.Point[](totalSamples);
+        uint256[] memory allColumnIndices = new uint256[](totalSamples);
+        QM31Field.QM31[] memory allValues = new QM31Field.QM31[](totalSamples);
+        QM31Field.QM31[] memory allRandoms = new QM31Field.QM31[](totalSamples);
+
+        uint256 sampleIdx = 0;
+        for (uint256 colIdx = 0; colIdx < samplesWithRandom.length; colIdx++) {
+            for (uint256 i = 0; i < samplesWithRandom[colIdx].length; i++) {
+                allPoints[sampleIdx] = samplesWithRandom[colIdx][i].sample.point;
+                allColumnIndices[sampleIdx] = colIdx;
+                allValues[sampleIdx] = samplesWithRandom[colIdx][i].sample.value;
+                allRandoms[sampleIdx] = samplesWithRandom[colIdx][i].randomCoeff;
+                sampleIdx++;
+            }
+        }
+
+        CirclePoint.Point[] memory uniquePoints = new CirclePoint.Point[](totalSamples);
+        uint256 numUniquePoints = 0;
+        for (uint256 i = 0; i < totalSamples; i++) {
+            bool found = false;
+            for (uint256 j = 0; j < numUniquePoints; j++) {
+                if (_pointsEqual(allPoints[i], uniquePoints[j])) {
+                    found = true;
                     break;
                 }
             }
-
-            // Get samples for this log size
-            PointSample[][] memory samplesForLogSize = _getSamplesForLogSize(
-                flattenedData,
-                logSize
-            );
-
-            // Get n_columns for this log size from each tree
-            uint256[] memory nColumnsForLogSize = _getNColumnsForLogSize(
-                nColumnsPerLogSize,
-                logSize
-            );
-
-            // Calculate answers for this log size
-            // In Rust: fri_answers_for_log_size returns Result<Vec<SecureField>, VerificationError>
-            // This becomes one column in our 2D array
-            QM31Field.QM31[] memory answersForLogSize = friAnswersForLogSize(
-                logSize,
-                samplesForLogSize,
-                randomCoeff,
-                queryPositions,
-                queriedValuesIter,
-                nColumnsForLogSize
-            );
-
-            // Store this group's answers as one column
-            result[i] = answersForLogSize;
-      
-
+            if (!found) {
+                uniquePoints[numUniquePoints] = allPoints[i];
+                numUniquePoints++;
+            }
         }
 
+        batches = new ColumnSampleBatchWithRandom[](numUniquePoints);
+        for (uint256 batchIdx = 0; batchIdx < numUniquePoints; batchIdx++) {
+            CirclePoint.Point memory currentPoint = uniquePoints[batchIdx];
 
+            uint256 count = 0;
+            for (uint256 i = 0; i < totalSamples; i++) {
+                if (_pointsEqual(allPoints[i], currentPoint)) {
+                    count++;
+                }
+            }
+
+            ColumnAndValueWithRandom[] memory cols = new ColumnAndValueWithRandom[](count);
+            uint256 k = 0;
+            for (uint256 i = 0; i < totalSamples; i++) {
+                if (_pointsEqual(allPoints[i], currentPoint)) {
+                    cols[k] = ColumnAndValueWithRandom({
+                        columnIndex: allColumnIndices[i],
+                        value: allValues[i],
+                        randomCoeff: allRandoms[i]
+                    });
+                    k++;
+                }
+            }
+
+            batches[batchIdx] = ColumnSampleBatchWithRandom({
+                point: currentPoint,
+                columnsAndValues: cols
+            });
+        }
+    }
+
+    function _calculateQuotientConstantsWithRandom(
+        ColumnSampleBatchWithRandom[] memory sampleBatches
+    ) private pure returns (QuotientConstantsWithRandom memory constants) {
+        constants.lineCoeffs = new QM31Field.QM31[][][](sampleBatches.length);
+
+        for (uint256 batchIdx = 0; batchIdx < sampleBatches.length; batchIdx++) {
+            ColumnSampleBatchWithRandom memory batch = sampleBatches[batchIdx];
+            constants.lineCoeffs[batchIdx] = new QM31Field.QM31[][](batch.columnsAndValues.length);
+
+            for (uint256 colIdx = 0; colIdx < batch.columnsAndValues.length; colIdx++) {
+                PointSample memory sample = PointSample({
+                    point: batch.point,
+                    value: batch.columnsAndValues[colIdx].value
+                });
+
+                constants.lineCoeffs[batchIdx][colIdx] = _complexConjugateLineCoeffs(
+                    sample,
+                    batch.columnsAndValues[colIdx].randomCoeff
+                );
+            }
+        }
+    }
+
+    function _accumulateRowQuotientsWithRandom(
+        ColumnSampleBatchWithRandom[] memory sampleBatches,
+        uint32[] memory queriedValuesAtRow,
+        QuotientConstantsWithRandom memory quotientConstants,
+        CirclePointM31.Point memory domainPoint
+    ) private pure returns (QM31Field.QM31 memory accumulator) {
+        CM31Field.CM31[] memory denominatorInverses = _calculateDenominatorInversesWithRandom(
+            sampleBatches,
+            domainPoint
+        );
+
+        accumulator = QM31Field.zero();
+
+        for (uint256 batchIdx = 0; batchIdx < sampleBatches.length; batchIdx++) {
+            ColumnSampleBatchWithRandom memory sampleBatch = sampleBatches[batchIdx];
+            QM31Field.QM31[][] memory batchLineCoeffs = quotientConstants.lineCoeffs[batchIdx];
+            CM31Field.CM31 memory denominatorInverse = denominatorInverses[batchIdx];
+
+            QM31Field.QM31 memory numerator = QM31Field.zero();
+            for (uint256 colIdx = 0; colIdx < sampleBatch.columnsAndValues.length; colIdx++) {
+                ColumnAndValueWithRandom memory columnAndValue = sampleBatch.columnsAndValues[colIdx];
+                QM31Field.QM31[] memory lineCoeffs = batchLineCoeffs[colIdx];
+
+                QM31Field.QM31 memory queriedValue = QM31Field.fromM31(
+                    queriedValuesAtRow[columnAndValue.columnIndex],
+                    0,
+                    0,
+                    0
+                );
+
+                QM31Field.QM31 memory value = QM31Field.mul(queriedValue, lineCoeffs[2]);
+                QM31Field.QM31 memory linearTerm = QM31Field.add(
+                    QM31Field.mul(lineCoeffs[0], QM31Field.fromM31(domainPoint.y, 0, 0, 0)),
+                    lineCoeffs[1]
+                );
+                numerator = QM31Field.add(numerator, QM31Field.sub(value, linearTerm));
+            }
+
+            accumulator = QM31Field.add(accumulator, QM31Field.mulCM31(numerator, denominatorInverse));
+        }
+    }
+
+    function _calculateDenominatorInversesWithRandom(
+        ColumnSampleBatchWithRandom[] memory sampleBatches,
+        CirclePointM31.Point memory domainPoint
+    ) private pure returns (CM31Field.CM31[] memory inverses) {
+        CM31Field.CM31[] memory denominators = new CM31Field.CM31[](sampleBatches.length);
+
+        for (uint256 i = 0; i < sampleBatches.length; i++) {
+            CirclePoint.Point memory samplePoint = sampleBatches[i].point;
+
+            CM31Field.CM31 memory prx = samplePoint.x.first;
+            CM31Field.CM31 memory pry = samplePoint.y.first;
+            CM31Field.CM31 memory pix = samplePoint.x.second;
+            CM31Field.CM31 memory piy = samplePoint.y.second;
+
+            CM31Field.CM31 memory term1 = CM31Field.mul(
+                CM31Field.sub(prx, CM31Field.fromM31(domainPoint.x, 0)),
+                piy
+            );
+            CM31Field.CM31 memory term2 = CM31Field.mul(
+                CM31Field.sub(pry, CM31Field.fromM31(domainPoint.y, 0)),
+                pix
+            );
+            denominators[i] = CM31Field.sub(term1, term2);
+        }
+
+        inverses = CM31Field.batchInverse(denominators);
     }
 
     /// @notice Calculate FRI answers for a specific log size
@@ -2211,16 +2568,20 @@ library FriVerifier {
         for (uint256 i = 0; i < sparseEvaluation.subsetEvals.length; i++) {
             totalM31Values += sparseEvaluation.subsetEvals[i].length * 4; // 4 M31 per QM31
         }
-        
+
+        uint256 nQm31Values = totalM31Values / SECURE_EXTENSION_DEGREE;
         uint32[] memory decommittedValues = new uint32[](totalM31Values);
-        uint256 valueIdx = 0;
+        uint256 write0 = 0;
+        uint256 write1 = nQm31Values;
+        uint256 write2 = 2 * nQm31Values;
+        uint256 write3 = 3 * nQm31Values;
         for (uint256 i = 0; i < sparseEvaluation.subsetEvals.length; i++) {
             for (uint256 j = 0; j < sparseEvaluation.subsetEvals[i].length; j++) {
                 QM31Field.QM31 memory qm31 = sparseEvaluation.subsetEvals[i][j];
-                decommittedValues[valueIdx++] = qm31.first.real;
-                decommittedValues[valueIdx++] = qm31.first.imag;
-                decommittedValues[valueIdx++] = qm31.second.real;
-                decommittedValues[valueIdx++] = qm31.second.imag;
+                decommittedValues[write0++] = qm31.first.real;
+                decommittedValues[write1++] = qm31.first.imag;
+                decommittedValues[write2++] = qm31.second.real;
+                decommittedValues[write3++] = qm31.second.imag;
             }
         }
 
@@ -2799,15 +3160,27 @@ library FriVerifier {
         QM31Field.QM31[][] memory sparseEvals,
         uint256 totalDecommittedM31Values
     ) private pure returns (uint32[] memory decommittedValues) {
+        require(
+            totalDecommittedM31Values % SECURE_EXTENSION_DEGREE == 0,
+            "Invalid decommitted values length"
+        );
+
+
+        uint256 nQm31Values = totalDecommittedM31Values / SECURE_EXTENSION_DEGREE;
         decommittedValues = new uint32[](totalDecommittedM31Values);
-        uint256 valueIdx = 0;
+
+        uint256 write0 = 0;
+        uint256 write1 = nQm31Values;
+        uint256 write2 = 2 * nQm31Values;
+        uint256 write3 = 3 * nQm31Values;
+
         for (uint256 colIdx = 0; colIdx < sparseEvals.length; colIdx++) {
             for (uint256 i = 0; i < sparseEvals[colIdx].length; i++) {
                 QM31Field.QM31 memory qm31 = sparseEvals[colIdx][i];
-                decommittedValues[valueIdx++] = qm31.first.real;
-                decommittedValues[valueIdx++] = qm31.first.imag;
-                decommittedValues[valueIdx++] = qm31.second.real;
-                decommittedValues[valueIdx++] = qm31.second.imag;
+                decommittedValues[write0++] = qm31.first.real;
+                decommittedValues[write1++] = qm31.first.imag;
+                decommittedValues[write2++] = qm31.second.real;
+                decommittedValues[write3++] = qm31.second.imag;
             }
         }
     }

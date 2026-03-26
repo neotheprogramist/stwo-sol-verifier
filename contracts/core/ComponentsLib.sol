@@ -112,10 +112,12 @@ library ComponentsLib {
     /// @notice Generate mask points for all components
     /// @param components_ The components struct
     /// @param point The circle point to generate mask points for
+    /// @param maxLogDegreeBound Maximum committed polynomial log degree bound
     /// @return componentMaskPoints Array containing mask points for each component
     function maskPoints(
         Components storage components_,
-        CirclePoint.Point memory point
+        CirclePoint.Point memory point,
+        uint32 maxLogDegreeBound
     ) internal view returns (FrameworkComponentLib.SamplePoints[] memory componentMaskPoints) {
 
         require(components_.isInitialized, "Components not initialized");
@@ -127,7 +129,8 @@ library ComponentsLib {
         for (uint256 i = 0; i < components_.components.length; i++) {
             componentMaskPoints[i] = FrameworkComponentLib.maskPoints(
                 components_.components[i],
-                point
+                point,
+                maxLogDegreeBound
             );
         }
 

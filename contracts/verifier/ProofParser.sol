@@ -2,6 +2,7 @@
 pragma solidity ^0.8.20;
 
 import "../fields/QM31Field.sol";
+import "../circle/CirclePoint.sol";
 import "../pcs/FriVerifier.sol";
 import "../vcs/MerkleVerifier.sol";
 import "../pcs/PcsConfig.sol";
@@ -87,17 +88,24 @@ library ProofParser {
     // Internal Helper Functions
 
     /// @notice Extract composition trace OODS evaluation from sampled values
-    /// The last tree in sampledValues is the composition tree (4 columns for SECURE_EXTENSION_DEGREE)
+    /// The last tree in sampledValues is the composition tree
+    /// It contains 2 * SECURE_EXTENSION_DEGREE columns (left + right halves)
     /// Each column has one evaluation at the OODS point
     /// @param proof The complete proof structure
+    /// @param oodsPoint The OODS point
+    /// @param maxLogDegreeBound Max log degree bound (used for split recombination)
     /// @return oodsEval The composition OODS evaluation as SecureField (QM31)
     /// @return success True if extraction was successful
-    function extractCompositionOodsEval(Proof memory proof) 
+    function extractCompositionOodsEval(
+        Proof memory proof,
+        CirclePoint.Point memory oodsPoint,
+        uint32 maxLogDegreeBound
+    ) 
         internal 
         pure 
         returns (QM31Field.QM31 memory oodsEval, bool success) 
     {
-        // Rust: let [.., composition_mask] = &**self.sampled_values
+
         if (proof.sampledValues.length == 0) {
             return (QM31Field.zero(), false);
         }
@@ -105,30 +113,42 @@ library ProofParser {
         uint256 compositionTreeIdx = proof.sampledValues.length - 1;
         QM31Field.QM31[][] memory compositionMask = proof.sampledValues[compositionTreeIdx];
         
-        // Rust: composition_mask.iter().map(|columns| { let &[eval] = &columns[..]; Some(eval) })
-        // Each column should have exactly 1 evaluation (at OODS point)
-        // SECURE_EXTENSION_DEGREE = 4 columns
+
+
         uint256 SECURE_EXTENSION_DEGREE = 4;
+        uint256 totalColumns = 2 * SECURE_EXTENSION_DEGREE;
         
-        if (compositionMask.length != SECURE_EXTENSION_DEGREE) {
+        if (compositionMask.length != totalColumns) {
             return (QM31Field.zero(), false);
         }
         
-        QM31Field.QM31[4] memory coordinateEvals;
+        QM31Field.QM31[4] memory leftEvals;
+        QM31Field.QM31[4] memory rightEvals;
         
-        for (uint256 i = 0; i < SECURE_EXTENSION_DEGREE; i++) {
+        for (uint256 i = 0; i < totalColumns; i++) {
             // Each column should have exactly 1 point (OODS point)
             if (compositionMask[i].length != 1) {
                 return (QM31Field.zero(), false);
             }
-            coordinateEvals[i] = compositionMask[i][0];
+            if (i < SECURE_EXTENSION_DEGREE) {
+                leftEvals[i] = compositionMask[i][0];
+            } else {
+                rightEvals[i - SECURE_EXTENSION_DEGREE] = compositionMask[i][0];
+            }
         }
         
-        // Rust: SecureField::from_partial_evals(coordinate_evals)
-        // In QM31, this is just the direct value (already a QM31 from 4 M31 coordinates)
-        // The 4 QM31 values represent the 4 coordinates of the SecureField
-        // We need to combine them into a single QM31
-        oodsEval = QM31Field.fromPartialEvals(coordinateEvals);
+        // Rust: left_eval + x * right_eval, where x is oods_point.repeated_double(max_log_degree_bound - 1).x
+        QM31Field.QM31 memory leftEval = QM31Field.fromPartialEvals(leftEvals);
+        QM31Field.QM31 memory rightEval = QM31Field.fromPartialEvals(rightEvals);
+
+        if (maxLogDegreeBound == 0) {
+            return (QM31Field.zero(), false);
+        }
+
+        CirclePoint.Point memory doubled = CirclePoint.repeatedDouble(oodsPoint, maxLogDegreeBound - 1);
+        QM31Field.QM31 memory x = doubled.x;
+
+        oodsEval = QM31Field.add(leftEval, QM31Field.mul(x, rightEval));
         
         return (oodsEval, true);
     }

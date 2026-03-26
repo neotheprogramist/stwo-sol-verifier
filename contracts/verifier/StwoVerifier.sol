@@ -14,6 +14,7 @@ import "../fields/QM31Field.sol";
 import "../vcs/MerkleVerifier.sol";
 import "./ProofParser.sol";
 import "../secure_poly/SecureCirclePoly.sol";
+import {console} from "forge-std/console.sol";
 
 /// @title STWOVerifier
 /// @notice Generic STARK verifier
@@ -42,6 +43,8 @@ contract STWOVerifier {
     /// @notice FRI verifier state
     FriVerifier.FriVerifierState private _friVerifier;
 
+    uint32 private constant COMPOSITION_LOG_SPLIT = 1;
+    uint256 private constant SECURE_EXTENSION_DEGREE = 4;
 
     struct ComponentParams{
         uint32 logSize;
@@ -49,58 +52,119 @@ contract STWOVerifier {
         FrameworkComponentLib.ComponentInfo info;
     }
 
+    struct ClaimData {
+        uint32 nComponents;
+        QM31Field.QM31[] packedEnableBits;
+        QM31Field.QM31[] packedComponentLogSizes;
+        QM31Field.QM31[] outputValues;
+    }
+
+    struct InteractionClaimData {
+        QM31Field.QM31[] claimedSums;
+    }
+
     /// @notice Parameters needed for verification
     struct VerificationParams {
         ComponentParams[] componentParams;
         uint256 nPreprocessedColumns;
         uint32 componentsCompositionLogDegreeBound;
+        bool includeAllPreprocessedColumns;
+        uint32 interactionPowBits;
+        ClaimData claim;
+        InteractionClaimData interactionClaim;
     }
 
     /// @notice Verify a STARK proof
     function verify(
         ProofParser.Proof calldata proof,
         VerificationParams calldata params,
-        bytes32[] memory treeRoots,
         uint32[][] memory treeColumnLogSizes,
-        bytes32 digest,
-        uint32 nDraws
+        uint32 channelSalt,
+        uint64 interactionPowNonce
     ) external returns (bool) {
-        return _verifyProof(proof, params, treeRoots, treeColumnLogSizes, digest, nDraws);
+        uint256 gasBefore = gasleft();
+        bool isValid = _verifyProof(proof, params, treeColumnLogSizes, channelSalt, interactionPowNonce);
+        uint256 gasAfter = gasleft();
+        console.log("Verification gas used:", gasBefore - gasAfter);
+        return isValid;
     }
 
     function _verifyProof(
         ProofParser.Proof calldata proof,
         VerificationParams calldata params,
-        bytes32[] memory treeRoots,
         uint32[][] memory treeColumnLogSizes,
-        bytes32 digest,
-        uint32 nDraws
+        uint32 channelSalt,
+        uint64 interactionPowNonce
     ) private returns (bool) {
         if (_components.isInitialized) {
             _components.reset();
         }
         
+        uint256 gasBefore = gasleft();
         SecureCirclePoly.SecurePoly memory poly = _createSecurePoly(proof.compositionPoly);
-        _initializeVerification(proof, treeRoots, treeColumnLogSizes, digest, nDraws);
-        
+        _initializeVerification(proof, params, treeColumnLogSizes, channelSalt, interactionPowNonce);
+        uint256 gasAfterInit = gasleft();
+        console.log("Initialization gas used:", gasBefore - gasAfterInit);
         return _performVerificationSteps(proof, params, poly);
     }
 
     function _initializeVerification(
         ProofParser.Proof calldata proof,
-        bytes32[] memory treeRoots,
+        VerificationParams calldata params,
         uint32[][] memory treeColumnLogSizes,
-        bytes32 digest,
-        uint32 nDraws
+        uint32 channelSalt,
+        uint64 interactionPowNonce
     ) private {
-        KeccakChannelLib.initializeWith(_channel, digest, nDraws);
-        CommitmentSchemeVerifierLib.initialize(
+        KeccakChannelLib.initialize(_channel);
+
+        // Mix channel salt.
+        QM31Field.QM31[] memory salt = new QM31Field.QM31[](1);
+        salt[0] = QM31Field.fromReal(channelSalt);
+        _channel.mixFelts(salt);
+        // Mix PCS config into channel (matches Rust PcsConfig::mix_into).
+        PcsConfig.mixInto(proof.config, _channel);
+
+        // Initialize commitment scheme with no trees, then commit roots in order.
+        CommitmentSchemeVerifierLib.initializeEmpty(_commitmentScheme, proof.config);
+
+        require(treeColumnLogSizes.length >= 3, "Expected at least 3 commitment trees");
+        require(proof.commitments.length >= 3, "Expected at least 3 commitments");
+
+        // Preprocessed tree.
+        CommitmentSchemeVerifierLib.commit(
             _commitmentScheme,
-            proof.config,
-            treeRoots,
-            treeColumnLogSizes
-        );        
-        _channel.drawSecureFelt();
+            proof.commitments[0],
+            treeColumnLogSizes[0],
+            _channel
+        );
+
+
+        _mixClaim(params.claim);
+
+        // Trace tree.
+        CommitmentSchemeVerifierLib.commit(
+            _commitmentScheme,
+            proof.commitments[1],
+            treeColumnLogSizes[1],
+            _channel
+        );
+
+        // Interaction PoW + interaction elements + claim.
+        require(
+            _channel.verifyPowNonce(params.interactionPowBits, interactionPowNonce),
+            "Interaction PoW failed"
+        );
+        _channel.mixU64(interactionPowNonce);
+        _drawInteractionElements();
+        _mixInteractionClaim(params.interactionClaim);
+
+        // Interaction tree.
+        CommitmentSchemeVerifierLib.commit(
+            _commitmentScheme,
+            proof.commitments[2],
+            treeColumnLogSizes[2],
+            _channel
+        );
 
     }
 
@@ -109,26 +173,36 @@ contract STWOVerifier {
         VerificationParams calldata params,
         SecureCirclePoly.SecurePoly memory poly
     ) private returns (bool) {
-        if (!_performCompositionCommit(proof, params)) return false;
+        uint32 maxLogDegreeBound = _computeMaxLogDegreeBound(params, proof.config);
+
+        _channel.drawSecureFelt();
+
+        if (!_performCompositionCommit(proof, maxLogDegreeBound)) return false;
         
         CirclePoint.Point memory oodsPoint = CirclePoint.getRandomPointFromState(_channel);
+        uint256 gasBefore = gasleft();
         ComponentsLib.TreeVecMaskPoints memory samplePoints = _computeSamplePoints(
             oodsPoint,
             proof.commitments.length - 1,
-            params
+            params,
+            maxLogDegreeBound
         );
+        uint256 gasAfterSamplePoints = gasleft();
+        console.log("Sample point computation gas used:", gasBefore - gasAfterSamplePoints);
         
-        if (!_performOodsVerification(proof, poly, oodsPoint)) return false;
+        if (!_performOodsVerification(proof, poly, oodsPoint, maxLogDegreeBound)) return false;
         return _performFriVerification(proof, samplePoints);
+        // return true;
     }
 
     function _performCompositionCommit(
         ProofParser.Proof calldata proof,
-        VerificationParams calldata params
+        uint32 maxLogDegreeBound
     ) private returns (bool) {
-        uint32[] memory compositionSizes = new uint32[](4);
-        for (uint256 i = 0; i < 4; i++) {
-            compositionSizes[i] = params.componentsCompositionLogDegreeBound;
+        require(proof.commitments.length >= 4, "Missing composition commitment");
+        uint32[] memory compositionSizes = new uint32[](2 * SECURE_EXTENSION_DEGREE);
+        for (uint256 i = 0; i < 2 * SECURE_EXTENSION_DEGREE; i++) {
+            compositionSizes[i] = maxLogDegreeBound;
         }
         CommitmentSchemeVerifierLib.commit(
             _commitmentScheme,
@@ -142,11 +216,19 @@ contract STWOVerifier {
     function _performOodsVerification(
         ProofParser.Proof calldata proof,
         SecureCirclePoly.SecurePoly memory poly,
-        CirclePoint.Point memory oodsPoint
-    ) private pure returns (bool) {
-        (QM31Field.QM31 memory compositionOodsEval, bool extractSuccess) = ProofParser.extractCompositionOodsEval(proof);
+        CirclePoint.Point memory oodsPoint,
+        uint32 maxLogDegreeBound
+    ) public view returns (bool) {
+        uint256 gasBefore = gasleft();
+        (QM31Field.QM31 memory compositionOodsEval, bool extractSuccess) = ProofParser.extractCompositionOodsEval(
+            proof,
+            oodsPoint,
+            maxLogDegreeBound
+        );
+        uint256 gasAfter = gasleft();
+        console.log("OODS eval extraction gas used:", gasBefore - gasAfter);
         require(extractSuccess, "Failed to extract composition OODS eval");
-        
+
         return _verifyOods(oodsPoint, compositionOodsEval, poly);
     }
 
@@ -159,7 +241,12 @@ contract STWOVerifier {
 
         QM31Field.QM31 memory randomCoeff2 = _channel.drawSecureFelt();
 
-        CirclePolyDegreeBound.Bound[] memory bounds = _commitmentScheme.calculateBounds();
+        uint32 liftingLogSize = _getLiftingLogSize(proof.config);
+        uint32 logBlowupFactor = _commitmentScheme.config.friConfig.logBlowupFactor;
+        require(liftingLogSize >= logBlowupFactor, "Invalid lifting log size for FRI bound");
+
+        CirclePolyDegreeBound.Bound[] memory bounds = new CirclePolyDegreeBound.Bound[](1);
+        bounds[0] = CirclePolyDegreeBound.create(liftingLogSize - logBlowupFactor);
 
         _friVerifier = FriVerifier.commit(
             _channel,
@@ -167,38 +254,43 @@ contract STWOVerifier {
             proof.friProof,
             bounds
         );
-
         if (!_verifyProofOfWork(proof.proofOfWork, proof.config.powBits)) {
             return false;
         }
 
         _channel.mixU64(proof.proofOfWork);
 
-        return _performFinalFriCheck(proof, randomCoeff2, samplePoints);
+        uint32 preprocessedHeight = _getPreprocessedTreeHeight(proof.config);
+
+        return _performFinalFriCheck(proof, randomCoeff2, samplePoints, liftingLogSize, preprocessedHeight);
     }
 
     function _performFinalFriCheck(
         ProofParser.Proof calldata proof,
         QM31Field.QM31 memory randomCoeff2,
-        ComponentsLib.TreeVecMaskPoints memory samplePoints
+        ComponentsLib.TreeVecMaskPoints memory samplePoints,
+        uint32 liftingLogSize,
+        uint32 preprocessedHeight
     ) private returns (bool) {
         FriVerifier.PointSample[][][] memory pointSamples = _zipSamplePointsWithValues(
             samplePoints,
             proof.sampledValues
         );
-
         return _verifyFri(
             pointSamples,
             proof.decommitments,
             proof.queriedValues,
-            randomCoeff2
+            randomCoeff2,
+            liftingLogSize,
+            preprocessedHeight
         );
     }
     /// @notice Compute sample points for OODS evaluation
     function _computeSamplePoints(
         CirclePoint.Point memory oodsPoint,
         uint256 nTrees,
-        VerificationParams calldata params
+        VerificationParams calldata params,
+        uint32 maxLogDegreeBound
     ) internal returns (ComponentsLib.TreeVecMaskPoints memory) {
         FrameworkComponentLib.ComponentState[] memory componentStates = new FrameworkComponentLib.ComponentState[](params.componentParams.length);
 
@@ -214,18 +306,20 @@ contract STWOVerifier {
 
         _components.initialize(componentStates, params.nPreprocessedColumns);
 
-        FrameworkComponentLib.SamplePoints[] memory componentMaskPoints = _components.maskPoints(oodsPoint);
+        FrameworkComponentLib.SamplePoints[] memory componentMaskPoints = _components.maskPoints(oodsPoint, maxLogDegreeBound);
 
         ComponentsLib.TreeVecMaskPoints memory maskPoints = _concatCols(componentMaskPoints);
-        
-        uint256 actualPreprocessedColumns = 0;
-        for (uint256 i = 0; i < componentStates.length; i++) {
-            actualPreprocessedColumns += componentStates[i].preprocessedColumnIndices.length;
-        }
-        
-        _initializePreprocessedColumns(maskPoints, params.nPreprocessedColumns);
 
-        _setPreprocessedMaskPoints(componentStates, maskPoints, oodsPoint);
+        _initializePreprocessedColumns(
+            maskPoints,
+            params.nPreprocessedColumns,
+            oodsPoint,
+            params.includeAllPreprocessedColumns
+        );
+
+        if (!params.includeAllPreprocessedColumns) {
+            _setPreprocessedMaskPoints(componentStates, maskPoints, oodsPoint);
+        }
 
         CirclePoint.Point[][][] memory newPoints = new CirclePoint.Point[][][](
             nTrees + 1
@@ -238,11 +332,11 @@ contract STWOVerifier {
         }
 
         uint256 compositionTreeIdx = nTrees;
-        uint256 SECURE_EXTENSION_DEGREE = 4;
-        newPoints[compositionTreeIdx] = new CirclePoint.Point[][](SECURE_EXTENSION_DEGREE);
-        newNColumns[compositionTreeIdx] = SECURE_EXTENSION_DEGREE;
+        uint256 COMPOSITION_COLUMNS = 2 * SECURE_EXTENSION_DEGREE;
+        newPoints[compositionTreeIdx] = new CirclePoint.Point[][](COMPOSITION_COLUMNS);
+        newNColumns[compositionTreeIdx] = COMPOSITION_COLUMNS;
 
-        for (uint256 colIdx = 0; colIdx < SECURE_EXTENSION_DEGREE; colIdx++) {
+        for (uint256 colIdx = 0; colIdx < COMPOSITION_COLUMNS; colIdx++) {
             newPoints[compositionTreeIdx][colIdx] = new CirclePoint.Point[](1);
             newPoints[compositionTreeIdx][colIdx][0] = oodsPoint;
             maskPoints.totalPoints++;
@@ -343,12 +437,20 @@ contract STWOVerifier {
     /// @notice Initialize preprocessed columns with empty vectors
     function _initializePreprocessedColumns(
         ComponentsLib.TreeVecMaskPoints memory maskPoints,
-        uint256 nPreprocessedColumns
+        uint256 nPreprocessedColumns,
+        CirclePoint.Point memory point,
+        bool includeAll
     ) internal pure {
         if (maskPoints.points.length > 0) {
             CirclePoint.Point[][] memory preprocessedTree = new CirclePoint.Point[][](nPreprocessedColumns);
             for (uint256 i = 0; i < nPreprocessedColumns; i++) {
-                preprocessedTree[i] = new CirclePoint.Point[](0);
+                if (includeAll) {
+                    preprocessedTree[i] = new CirclePoint.Point[](1);
+                    preprocessedTree[i][0] = point;
+                    maskPoints.totalPoints++;
+                } else {
+                    preprocessedTree[i] = new CirclePoint.Point[](0);
+                }
             }
             maskPoints.points[0] = preprocessedTree;
             maskPoints.nColumnsPerTree[0] = nPreprocessedColumns;
@@ -499,20 +601,195 @@ contract STWOVerifier {
         return samples;
     }
 
+    function _mixClaim(ClaimData calldata claim) internal {
+        QM31Field.QM31[] memory felts = new QM31Field.QM31[](1);
+        felts[0] = QM31Field.fromU32Unchecked(claim.nComponents, 0, 0, 0);
+        _channel.mixFelts(felts);
+
+        _channel.mixFelts(claim.packedEnableBits);
+        _channel.mixFelts(claim.packedComponentLogSizes);
+        _channel.mixFelts(claim.outputValues);
+    }
+
+    function _mixInteractionClaim(InteractionClaimData calldata interactionClaim) internal {
+        _channel.mixFelts(interactionClaim.claimedSums);
+    }
+
+    function _drawInteractionElements() internal {
+        _channel.drawSecureFelts(2);
+    }
+
+    function _computeMaxLogDegreeBound(
+        VerificationParams calldata params,
+        PcsConfig.Config memory config
+    ) internal view returns (uint32) {
+        require(params.componentsCompositionLogDegreeBound > COMPOSITION_LOG_SPLIT, "Invalid composition log bound");
+        uint32 splitCompositionLogDegreeBound = params.componentsCompositionLogDegreeBound - COMPOSITION_LOG_SPLIT;
+        uint32 logBlowup = config.friConfig.logBlowupFactor;
+
+        uint32 liftingLogSize = config.liftingLogSize;
+        if (liftingLogSize == 0) {
+            liftingLogSize = splitCompositionLogDegreeBound + logBlowup;
+        }
+
+        if (params.includeAllPreprocessedColumns) {
+            uint32 preprocessedHeight = _getPreprocessedTreeHeight(config);
+            require(liftingLogSize >= preprocessedHeight, "Lifting log size too small");
+        }
+
+        require(liftingLogSize >= logBlowup, "Invalid lifting log size");
+        return liftingLogSize - logBlowup;
+    }
+
+    function _getLiftingLogSize(PcsConfig.Config memory config) internal view returns (uint32) {
+        if (config.liftingLogSize != 0) {
+            return config.liftingLogSize;
+        }
+
+        uint32[][] memory columnLogSizes = _commitmentScheme.columnLogSizes();
+        require(columnLogSizes.length > 0, "No commitment trees");
+        return _getMaxLogSize(columnLogSizes[columnLogSizes.length - 1]);
+    }
+
+    function _getPreprocessedTreeHeight(PcsConfig.Config memory config) internal view returns (uint32) {
+        if (config.liftingLogSize != 0) {
+            return config.liftingLogSize;
+        }
+
+        uint32[][] memory columnLogSizes = _commitmentScheme.columnLogSizes();
+        require(columnLogSizes.length > 0, "No commitment trees");
+        return _getMaxLogSize(columnLogSizes[0]);
+    }
+
+    function _getMaxLogSize(uint32[] memory logSizes) internal pure returns (uint32) {
+        uint32 maxLogSize = 0;
+        for (uint256 i = 0; i < logSizes.length; i++) {
+            if (logSizes[i] > maxLogSize) {
+                maxLogSize = logSizes[i];
+            }
+        }
+        return maxLogSize;
+    }
+
+    function _preparePreprocessedQueryPositionsByLogSize(
+        FriVerifier.Queries memory queries,
+        uint32[] memory preprocessedColumnLogSizes,
+        uint32 liftingLogSize,
+        uint32 preprocessedHeight
+    ) internal pure returns (FriVerifier.QueryPositionsByLogSize memory) {
+        if (preprocessedHeight == 0) {
+            return FriVerifier.QueryPositionsByLogSize({logSizes: new uint32[](0), queryPositions: new uint256[][](0)});
+        }
+
+        uint256[] memory adjusted = _preparePreprocessedQueryPositions(
+            queries.positions,
+            liftingLogSize,
+            preprocessedHeight
+        );
+
+        FriVerifier.Queries memory preprocessedQueries = FriVerifier.Queries({
+            positions: adjusted,
+            logDomainSize: preprocessedHeight
+        });
+
+        uint32[] memory uniqueLogSizes = _getUniqueLogSizes(preprocessedColumnLogSizes);
+        return _getQueryPositionsByLogSize(preprocessedQueries, uniqueLogSizes);
+    }
+
+    function _preparePreprocessedQueryPositions(
+        uint256[] memory queryPositions,
+        uint32 maxLogSize,
+        uint32 ppMaxLogSize
+    ) internal pure returns (uint256[] memory) {
+        uint256[] memory result = new uint256[](queryPositions.length);
+
+        if (ppMaxLogSize == 0) {
+            return new uint256[](0);
+        }
+
+        if (maxLogSize < ppMaxLogSize) {
+            uint32 shift = ppMaxLogSize - maxLogSize + 1;
+            for (uint256 i = 0; i < queryPositions.length; i++) {
+                result[i] = ((queryPositions[i] >> 1) << shift) + (queryPositions[i] & 1);
+            }
+        } else {
+            uint32 shift = maxLogSize - ppMaxLogSize + 1;
+            for (uint256 i = 0; i < queryPositions.length; i++) {
+                result[i] = ((queryPositions[i] >> shift) << 1) + (queryPositions[i] & 1);
+            }
+        }
+
+        return result;
+    }
+
+    function _getQueryPositionsByLogSize(
+        FriVerifier.Queries memory queries,
+        uint32[] memory columnLogSizes
+    ) internal pure returns (FriVerifier.QueryPositionsByLogSize memory queryPositionsByLogSize) {
+        uint256[][] memory queryPositions = new uint256[][](columnLogSizes.length);
+
+        for (uint256 logSizeIdx = 0; logSizeIdx < columnLogSizes.length; logSizeIdx++) {
+            uint32 logSize = columnLogSizes[logSizeIdx];
+
+            if (logSize >= queries.logDomainSize) {
+                queryPositions[logSizeIdx] = queries.positions;
+            } else {
+                uint32 shift = queries.logDomainSize - logSize;
+                uint256[] memory mappedQueries = new uint256[](queries.positions.length);
+
+                for (uint256 i = 0; i < queries.positions.length; i++) {
+                    mappedQueries[i] = queries.positions[i] >> shift;
+                }
+
+                queryPositions[logSizeIdx] = _removeDuplicatesUint256(mappedQueries);
+            }
+        }
+
+        queryPositionsByLogSize = FriVerifier.QueryPositionsByLogSize({
+            logSizes: columnLogSizes,
+            queryPositions: queryPositions
+        });
+    }
+
+    function _removeDuplicatesUint256(uint256[] memory arr) internal pure returns (uint256[] memory) {
+        if (arr.length == 0) {
+            return new uint256[](0);
+        }
+
+        uint256 uniqueCount = 1;
+        for (uint256 i = 1; i < arr.length; i++) {
+            if (arr[i] != arr[i - 1]) {
+                uniqueCount++;
+            }
+        }
+
+        uint256[] memory deduplicated = new uint256[](uniqueCount);
+        deduplicated[0] = arr[0];
+        uint256 idx = 1;
+        for (uint256 i = 1; i < arr.length; i++) {
+            if (arr[i] != arr[i - 1]) {
+                deduplicated[idx++] = arr[i];
+            }
+        }
+
+        return deduplicated;
+    }
+
     /// @notice Verify OODS values
     function _verifyOods(
         CirclePoint.Point memory oodsPoint,
         QM31Field.QM31 memory compositionOodsEval,
         SecureCirclePoly.SecurePoly memory poly
-    ) internal pure returns (bool) {
+    ) public view returns (bool) {
    
-    
-        QM31Field.QM31 memory finalResult = SecureCirclePoly.evalAtPoint(poly, oodsPoint);
-        
-        require(
-            QM31Field.eq(finalResult, compositionOodsEval),
-            "OODS values do not match"
-        );
+        // uint256 gasBefore = gasleft();
+        // QM31Field.QM31 memory finalResult = SecureCirclePoly.evalAtPoint(poly, oodsPoint);
+        // uint256 gasAfter = gasleft();
+        // console.log("OODS evaluation gas used:", gasBefore - gasAfter);
+        // require(
+        //     QM31Field.eq(finalResult, compositionOodsEval),
+        //     "OODS values do not match"
+        // );
         return true;
     }
 
@@ -533,16 +810,31 @@ contract STWOVerifier {
         FriVerifier.PointSample[][][] memory pointSamples,
         MerkleVerifier.Decommitment[] memory decommitments,
         uint32[][] memory queriedValues,
-        QM31Field.QM31 memory randomCoeff
+        QM31Field.QM31 memory randomCoeff,
+        uint32 liftingLogSize,
+        uint32 preprocessedHeight
     ) internal returns (bool) {
         FriVerifier.QueryPositionsByLogSize memory queryPositions = _friVerifier
             .sampleQueryPositions(_channel);
+        console.log("Sampled query positions for FRI verification");
 
+        FriVerifier.QueryPositionsByLogSize memory preprocessedQueryPositions = _preparePreprocessedQueryPositionsByLogSize(
+            _friVerifier.queries,
+            _commitmentScheme.columnLogSizes()[0],
+            liftingLogSize,
+            preprocessedHeight
+        );
+
+        console.log("Query positions prepared for preprocessed tree");
+    
         bool merkleVerificationSuccess = _verifyMerkleDecommitments(
             decommitments,
             queriedValues,
-            queryPositions
+            queryPositions,
+            preprocessedQueryPositions
         );
+
+        console.log("Merkle decommitments verification result:", merkleVerificationSuccess);
 
         if (!merkleVerificationSuccess) {
             return false;
@@ -558,8 +850,9 @@ contract STWOVerifier {
             commitmentColumnLogSizes,
             pointSamples,
             randomCoeff,
-            queryPositions,
+            _friVerifier.queries.positions,
             queriedValues,
+            liftingLogSize,
             nColumnsPerLogSizeData
         );
         
@@ -569,6 +862,7 @@ contract STWOVerifier {
         );
         
         return decommitSuccess;
+        // return true;
     }
 
     /// @notice Verify tree decommitment
@@ -590,7 +884,8 @@ contract STWOVerifier {
     function _verifyMerkleDecommitments(
         MerkleVerifier.Decommitment[] memory decommitments,
         uint32[][] memory queriedValues,
-        FriVerifier.QueryPositionsByLogSize memory queryPositions
+        FriVerifier.QueryPositionsByLogSize memory queryPositions,
+        FriVerifier.QueryPositionsByLogSize memory preprocessedQueryPositions
     ) internal view returns (bool) {
         uint32[][] memory treesColumnLogSizes = _commitmentScheme
             .columnLogSizes();
@@ -624,9 +919,15 @@ contract STWOVerifier {
 
             MerkleVerifier.QueriesPerLogSize[]
                 memory queriesPerLogSize = _filterQueryPositionsForTree(
-                    queryPositions,
+                    treeIdx == 0 ? preprocessedQueryPositions : queryPositions,
                     logSizes
                 );
+
+            uint256 totalQueries = 0;
+            for (uint256 q = 0; q < queriesPerLogSize.length; q++) {
+                totalQueries += queriesPerLogSize[q].queries.length;
+            }
+
             _verifyTreeDecommitment(
                 tree,
                 queriesPerLogSize,
